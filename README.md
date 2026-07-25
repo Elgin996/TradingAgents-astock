@@ -18,23 +18,16 @@
   <a href="./CHANGES_FROM_UPSTREAM.md"><img alt="改动记录" src="https://img.shields.io/badge/改动记录-CHANGES-orange"/></a>
 </p>
 
----
-
-## 目录
-
-- [为什么做这个 Fork](#为什么做这个-fork)
-- [与上游对比](#与上游对比)
-- [架构概览](#架构概览)
-- [7 个 Analyst 角色](#7-个-analyst-角色)
-- [数据源](#数据源)
-- [快速开始](#快速开始)
-- [Web UI](#web-ui)
-- [配置说明](#配置说明)
-- [项目结构](#项目结构)
-- [项目定位](#项目定位)
-- [致谢](#致谢)
-- [Donate](#donate)
-- [许可证](#许可证)
+<p align="center">
+  <a href="#为什么做这个-fork">为什么做这个 Fork</a> ·
+  <a href="#与上游对比">与上游对比</a> ·
+  <a href="#架构概览">架构概览</a> ·
+  <a href="#7-个-analyst-角色">Analyst 角色</a> ·
+  <a href="#数据源">数据源</a> ·
+  <a href="#快速开始">快速开始</a> ·
+  <a href="#web-ui">Web UI</a> ·
+  <a href="#常见问题排错">排错</a>
+</p>
 
 ---
 
@@ -381,26 +374,6 @@ TradingAgents-Astock/
 
 ---
 
-## 许可证
-
-[Apache License 2.0](./LICENSE)
-
-本项目是 TauricResearch/TradingAgents 的 fork，继承 Apache 2.0 许可证。详见 [NOTICE](./NOTICE)。
-
-**作者：** Simon 林 · X [@linsizhen](https://x.com/linsizhen) · TikTok [@simonlin0423](https://www.tiktok.com/@simonlin0423) · 邮箱：[simonlin0423@gmail.com](mailto:simonlin0423@gmail.com)
-
-## Donate
-
-如果这个工具帮到了你的投研工作流，欢迎请作者喝杯咖啡 ☕
-
-<p align="center">
-  <a href="https://buymeacoffee.com/simonlin1212"><img src="./assets/bmc-qr.png" width="180" alt="Buy Me a Coffee"></a>
-</p>
-
-> 想要什么功能？欢迎开 [Issue](https://github.com/simonlin1212/tradingagents-astock/issues) 提需求，赞助者的 Issue 优先处理。
-
----
-
 ## 项目定位
 
 **这是一个框架的工程实现，不是一个投资产品。**
@@ -416,3 +389,25 @@ TradingAgents-Astock/
 > - 本项目不构成任何投资建议；投资决策请咨询持有中国证监会颁发资质的专业机构
 > - 作者不对使用本工具产生的任何投资损失承担责任
 > - 股市有风险，投资需谨慎
+
+---
+
+## 赞赏
+
+如果这个工具帮到了你的投研工作流，欢迎请作者喝杯咖啡 ☕
+
+<p align="center">
+  <a href="https://buymeacoffee.com/simonlin1212"><img src="./assets/bmc-qr.png" width="180" alt="Buy Me a Coffee"></a>
+</p>
+
+> 想要什么功能？欢迎开 [Issue](https://github.com/simonlin1212/tradingagents-astock/issues) 提需求，赞助者的 Issue 优先处理。
+
+---
+
+## License
+
+[Apache License 2.0](./LICENSE)
+
+本项目是 TauricResearch/TradingAgents 的 fork，继承 Apache 2.0 许可证。详见 [NOTICE](./NOTICE)。
+
+**作者：** Simon 林 · X [@linsizhen](https://x.com/linsizhen) · TikTok [@simonlin0423](https://www.tiktok.com/@simonlin0423) · 邮箱：[simonlin0423@gmail.com](mailto:simonlin0423@gmail.com)
