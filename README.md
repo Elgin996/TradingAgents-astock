@@ -387,16 +387,14 @@ TradingAgents-Astock/
 
 本项目是 TauricResearch/TradingAgents 的 fork，继承 Apache 2.0 许可证。详见 [NOTICE](./NOTICE)。
 
+**作者：** Simon 林 · X [@linsizhen](https://x.com/linsizhen) · TikTok [@simonlin0423](https://www.tiktok.com/@simonlin0423) · 邮箱：[simonlin0423@gmail.com](mailto:simonlin0423@gmail.com)
+
 ## Donate
 
 如果这个工具帮到了你的投研工作流，欢迎请作者喝杯咖啡 ☕
 
 <p align="center">
-  <img src="./assets/wechat-sponsor.jpg" width="240" alt="微信赞赏码">
-</p>
-<p align="center">
-  <a href="https://ifdian.net/a/simonlin">爱发电</a> ·
-  <a href="https://buymeacoffee.com/simonlin1212">Buy Me a Coffee</a>
+  <a href="https://buymeacoffee.com/simonlin1212">☕ Buy Me a Coffee</a>
 </p>
 
 > 想要什么功能？欢迎开 [Issue](https://github.com/simonlin1212/tradingagents-astock/issues) 提需求，赞助者的 Issue 优先处理。
