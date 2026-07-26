@@ -391,4 +391,4 @@ If this tool saved you time, a coffee is appreciated ☕
 
 This project is a fork of TauricResearch/TradingAgents and inherits the Apache 2.0 license. See [NOTICE](./NOTICE).
 
-**Author:** Simon Lin · X [@linsizhen](https://x.com/linsizhen) · TikTok [@simonlin0423](https://www.tiktok.com/@simonlin0423) · Email: [simonlin0423@gmail.com](mailto:simonlin0423@gmail.com)
+**Author:** Simon Lin · X [@linsizhen](https://x.com/linsizhen) · Email: [simonlin0423@gmail.com](mailto:simonlin0423@gmail.com)
