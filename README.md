@@ -1,3 +1,5 @@
+<p align="center"><b>简体中文</b> | <a href="README_en.md">English</a></p>
+
 <h1 align="center">TradingAgents-Astock</h1>
 
 <p align="center">
