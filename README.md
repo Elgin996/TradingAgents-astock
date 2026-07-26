@@ -302,6 +302,11 @@ streamlit run web/app.py
 **Q: 导出 PDF 报 `UnicodeEncodeError: 'latin-1' codec can't encode`？**
 你的环境里装了**旧版 `fpdf`（pyfpdf）**，它和本项目用的 `fpdf2` 都以 `fpdf` 名称导入、互相冲突。执行：`pip uninstall -y fpdf && pip install "fpdf2>=2.8.6"`。实在不行可改用「下载 Markdown」导出（零依赖，永远可用）。
 
+**Q: Docker 里怎么跑 Web UI？容器启动报 `Invalid value: File does not exist: web/app.py`？**
+用 compose 里的 `web` 服务：`docker compose up web`，然后开 http://localhost:8501 。
+
+报这个错通常是因为命令写成了 `streamlit run web/app.py`——这条**依赖当前工作目录**，工作目录不对就找不到文件。正确的入口是 `tradingagents-web`（即 `web.launch:main`），它按 `__file__` 解析 `app.py` 的绝对路径，跟工作目录无关。本地跑同理，装完后直接 `tradingagents-web` 最稳。
+
 **Q: Docker 里导出 PDF 报「未找到中文字体」？**
 v0.2.12 起 Dockerfile 已内置 `fonts-noto-cjk`，重新 `docker build` 即可。旧镜像可临时 `apt install fonts-noto-cjk`，或改用 Markdown 导出。
 
