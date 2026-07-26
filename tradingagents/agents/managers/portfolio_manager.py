@@ -55,9 +55,19 @@ def create_portfolio_manager(llm):
 
 **A-Stock Trading Constraints** (must factor into your decision):
 - T+1 settlement: shares bought today cannot be sold until the next trading day
-- Daily price limits: main board ±10%, STAR/ChiNext ±20%, ST stocks ±5%
-- Minimum lot size: 100 shares (1 手) for main board; 200 shares for STAR/ChiNext
-- Trading hours: 09:30-11:30, 13:00-15:00 (Beijing time)
+- Daily price limits: main board ±10%, STAR/ChiNext ±20%, Beijing Stock Exchange ±30%.
+  Risk-warning stocks (ST/*ST) do NOT get a narrower band: since 2026-07-06 main-board
+  ST/*ST moved from ±5% to ±10% (same as ordinary main-board shares), and STAR/ChiNext
+  ST/*ST have always been ±20%.
+- Newly listed stocks have NO price limit for their first 5 trading days (first day only
+  on the Beijing Stock Exchange) — this matters most for recently-IPO'd names.
+- Minimum lot size: 100 shares (1 手) on main board and ChiNext, in 100-share multiples;
+  STAR board is 200 shares minimum, incrementing by 1 share; Beijing Stock Exchange is
+  100 shares minimum, incrementing by 1 share.
+- Trading hours (Beijing time): opening call auction 09:15-09:25, continuous trading
+  09:30-11:30 and 13:00-14:57, closing call auction 14:57-15:00. Since 2026-07-06 the
+  after-hours fixed-price session (15:05-15:30, traded at the closing price) covers all
+  A-shares and ETFs.
 - ST/delisting risk: ST or *ST status signals regulatory warning; factor into position sizing
 - Margin eligibility: not all A-shares are margin-eligible; assume cash-only unless stated
 
