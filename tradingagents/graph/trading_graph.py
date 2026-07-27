@@ -70,31 +70,43 @@ def _normalize_yfinance_ticker(ticker: str) -> str:
 
     # The A-stock layer accepts SH/SZ/BJ prefixes and uses .SH for Shanghai,
     # whereas Yahoo uses .SS.  Normalize those forms before handling bare
-    # six-digit codes.
+    # six-digit codes. Yahoo has no Beijing exchange suffix, so keep BJ codes
+    # unqualified instead of inventing a symbol that cannot return data.
     if (
         len(symbol) == 9
         and symbol[:6].isdigit()
         and symbol[6:] in (".SH", ".SZ", ".BJ")
     ):
         code, exchange = symbol[:6], symbol[7:]
-        return f"{code}.{('SS' if exchange == 'SH' else exchange)}"
+        if exchange == "SH":
+            return f"{code}.SS"
+        if exchange == "SZ":
+            return f"{code}.SZ"
+        return code
     if (
         len(symbol) == 8
         and symbol[:2] in ("SH", "SZ", "BJ")
         and symbol[2:].isdigit()
     ):
         code, exchange = symbol[2:], symbol[:2]
-        return f"{code}.{('SS' if exchange == 'SH' else exchange)}"
+        if exchange == "SH":
+            return f"{code}.SS"
+        if exchange == "SZ":
+            return f"{code}.SZ"
+        return code
 
     if len(symbol) != 6 or not symbol.isdigit():
         return symbol
 
+    # The 920xxx range is Beijing-listed; Yahoo has no supported suffix for it.
+    if symbol.startswith("92"):
+        return symbol
     # Shanghai-listed A shares, B shares and ETFs use the .SS suffix on Yahoo.
     if symbol.startswith(("5", "6", "9")):
         return f"{symbol}.SS"
-    # Beijing-listed symbols are also six digits and Yahoo uses .BJ.
+    # Other Beijing-listed six-digit ranges are not covered by Yahoo either.
     if symbol.startswith(("4", "8")):
-        return f"{symbol}.BJ"
+        return symbol
     # Shenzhen-listed stocks (000/001/002/003/300/301, etc.).
     return f"{symbol}.SZ"
 

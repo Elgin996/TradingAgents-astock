@@ -401,6 +401,12 @@ class TestDeferredReflection:
         assert _normalize_yfinance_ticker("SH600519") == "600519.SS"
         assert _normalize_yfinance_ticker("NVDA") == "NVDA"
 
+    def test_normalize_yfinance_ticker_does_not_invent_beijing_suffix(self):
+        assert _normalize_yfinance_ticker("830799") == "830799"
+        assert _normalize_yfinance_ticker("920002") == "920002"
+        assert _normalize_yfinance_ticker("BJ830799") == "830799"
+        assert _normalize_yfinance_ticker("830799.BJ") == "830799"
+
     # update_with_outcome
 
     def test_update_replaces_pending_tag(self, tmp_path):
