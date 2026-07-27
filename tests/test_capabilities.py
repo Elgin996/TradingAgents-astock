@@ -16,11 +16,12 @@ def test_deepseek_v4_and_reasoner_reject_tool_choice():
 
 
 @pytest.mark.unit
-def test_minimax_m2_variants_reject_tool_choice():
+def test_minimax_m2_variants_support_tool_choice_and_reasoning_split():
     for model in ("MiniMax-M2", "MiniMax-M2.7", "MiniMax-M2.7-highspeed"):
         capabilities = get_capabilities(model)
-        assert capabilities.supports_tool_choice is False
+        assert capabilities.supports_tool_choice is True
         assert capabilities.supports_json_mode is False
+        assert capabilities.supports_reasoning_split is True
 
 
 @pytest.mark.unit
@@ -28,6 +29,14 @@ def test_unknown_model_uses_permissive_defaults():
     capabilities = get_capabilities("some-future-model")
     assert capabilities.supports_tool_choice is True
     assert capabilities.preferred_structured_method == "function_calling"
+    assert capabilities.supports_reasoning_split is False
+
+
+@pytest.mark.unit
+def test_future_minimax_family_does_not_inherit_m2_reasoning_split():
+    capabilities = get_capabilities("MiniMax-M3")
+    assert capabilities.supports_tool_choice is True
+    assert capabilities.supports_reasoning_split is False
 
 
 @pytest.mark.unit
@@ -42,7 +51,18 @@ def test_minimax_payload_enables_reasoning_split():
 
 
 @pytest.mark.unit
-def test_minimax_structured_output_keeps_schema_but_omits_tool_choice():
+def test_minimax_payload_does_not_enable_reasoning_split_for_custom_model():
+    client = MinimaxChatOpenAI(
+        model="custom-minimax-model",
+        api_key="placeholder",
+        base_url="https://api.minimax.chat/v1",
+    )
+    payload = client._get_request_payload([{"role": "user", "content": "hi"}])
+    assert "reasoning_split" not in payload
+
+
+@pytest.mark.unit
+def test_minimax_structured_output_keeps_schema_and_tool_choice():
     class _Sample(BaseModel):
         answer: str
 
@@ -55,7 +75,11 @@ def test_minimax_structured_output_keeps_schema_but_omits_tool_choice():
     first = wrapped.steps[0] if hasattr(wrapped, "steps") else wrapped
     kwargs = getattr(first, "kwargs", {})
 
-    assert kwargs.get("tool_choice") is None or "tool_choice" not in kwargs
+    tool_choice = kwargs.get("tool_choice")
+    assert tool_choice == {
+        "type": "function",
+        "function": {"name": "_Sample"},
+    }
     assert any(
         tool.get("function", {}).get("name") == "_Sample"
         for tool in kwargs.get("tools", [])

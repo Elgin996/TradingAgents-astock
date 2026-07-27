@@ -34,8 +34,8 @@ class NormalizedChatOpenAI(ChatOpenAI):
                 f"{self.model_name} has no structured-output method available"
             )
         method = method or capabilities.preferred_structured_method
-        # DeepSeek V4/reasoner and MiniMax M2.x accept the schema as a tool,
-        # but reject LangChain's function-spec ``tool_choice`` parameter.
+        # DeepSeek V4/reasoner accept the schema as a tool, but reject
+        # LangChain's function-spec ``tool_choice`` parameter.
         if method == "function_calling" and not capabilities.supports_tool_choice:
             kwargs.setdefault("tool_choice", None)
         return super().with_structured_output(schema, method=method, **kwargs)
@@ -112,7 +112,9 @@ class MinimaxChatOpenAI(NormalizedChatOpenAI):
 
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
-        payload.setdefault("reasoning_split", True)
+        capabilities = get_capabilities(self.model_name)
+        if capabilities.supports_reasoning_split:
+            payload.setdefault("reasoning_split", True)
         return payload
 
 # Kwargs forwarded from user config to ChatOpenAI

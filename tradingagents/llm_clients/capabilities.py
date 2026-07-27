@@ -31,6 +31,7 @@ class ModelCapabilities:
     supports_json_schema: bool
     preferred_structured_method: StructuredMethod
     requires_reasoning_content_roundtrip: bool = False
+    supports_reasoning_split: bool = False
 
 
 _DEEPSEEK_THINKING = ModelCapabilities(
@@ -49,10 +50,11 @@ _DEEPSEEK_CHAT = ModelCapabilities(
 )
 
 _MINIMAX_THINKING = ModelCapabilities(
-    supports_tool_choice=False,
+    supports_tool_choice=True,
     supports_json_mode=False,
     supports_json_schema=False,
     preferred_structured_method="function_calling",
+    supports_reasoning_split=True,
 )
 
 _DEFAULT = ModelCapabilities(
@@ -80,7 +82,9 @@ _BY_ID: dict[str, ModelCapabilities] = {
 _BY_PATTERN: list[tuple[re.Pattern[str], ModelCapabilities]] = [
     (re.compile(r"^deepseek-v\d"), _DEEPSEEK_THINKING),
     (re.compile(r"^deepseek-reasoner"), _DEEPSEEK_THINKING),
-    (re.compile(r"^MiniMax-M\d"), _MINIMAX_THINKING),
+    # ``reasoning_split`` is an M2.x capability; do not assume it for a
+    # future MiniMax family (for example M3) until that API is verified.
+    (re.compile(r"^MiniMax-M2(?:$|[.-])"), _MINIMAX_THINKING),
 ]
 
 
