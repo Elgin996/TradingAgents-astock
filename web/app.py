@@ -177,6 +177,18 @@ def _build_config() -> dict:
     config["max_risk_discuss_rounds"] = 1
     config["checkpoint_enabled"] = True
     config["output_language"] = "Chinese"
+    # Optional: route nodes through a personal Claude Pro/Max subscription (Agent
+    # SDK). Scope: "deep" = Research/Portfolio only; "all" = + the 7 analysts.
+    # Leaving the fallback keys None makes the graph fall back to the
+    # sidebar-selected llm_provider + models on quota/failure.
+    scope = st.session_state.get("subscription_scope", "off")
+    sub_model = st.session_state.get("agent_sdk_model") or "claude-opus-4-8"
+    if scope in ("deep", "all"):
+        config["deep_think_provider_override"] = "claude_agent_sdk"
+        config["agent_sdk_model"] = sub_model
+    if scope == "all":
+        config["quick_think_provider_override"] = "claude_agent_sdk"
+        config["agent_sdk_quick_model"] = sub_model
     return config
 
 

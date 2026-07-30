@@ -6,6 +6,63 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.4.0] — 2026-07-31
+
+新增：让节点走**个人 Claude Pro/Max 订阅额度**而非按 token 计费的 Anthropic API。
+基于社区 PR [#86](https://github.com/simonlin1212/TradingAgents-astock/pull/86)
+（感谢 [@kingxiaozhe](https://github.com/kingxiaozhe)）。默认关闭，行为不变。
+
+### 新增：`claude_agent_sdk` provider（可选依赖 `[agentsdk]`）
+
+此前项目对 Claude 只有 `anthropic` provider＝走 `ANTHROPIC_API_KEY` **按 token 计费**，
+没有任何走订阅的通道。本版补上：经 Claude Agent SDK 调用本机已登录的 `claude`，
+**消耗订阅额度，不产生 API 账单**。
+
+- **两档覆盖**：`deep_think_provider_override` 只覆盖深度节点（Research / Portfolio
+  Manager）；再加 `quick_think_provider_override` 则含 7 个工具分析师＝全节点走订阅。
+  Web 侧栏三档（关闭 / 仅深度 / 所有节点）。
+- **工具桥接**：分析师的 LangChain 工具桥接为 Agent SDK 进程内 MCP 工具，SDK 内部跑完
+  ReAct 循环返回最终报告，LangGraph 视为完成，无需改图。
+- **启动护栏**：检测到 `ANTHROPIC_API_KEY` 与订阅覆盖共存时**直接报错中止**——
+  API key 优先级更高，留着它会悄悄走 API 计费。
+- **撞额度自动降级**到配置的付费 provider（`agent_sdk_fallback_provider` / `_model`）。
+- 仅供个人自用：消耗的是使用者自己账号的额度。
+
+### 在 PR 基础上的四处改动
+
+1. **模型默认值改用别名**。PR 默认 `claude-opus-4-8`，写死的完整 id 会随版本迭代过期
+   （仓库 `model_catalog` 的 anthropic 条目就已停在 `4-6`）。改用 `claude` CLI 的
+   `opus` / `sonnet` 别名——恒指向最新模型。完整 id 仍然支持。
+   quick 节点默认给 `sonnet` 而非 `opus`：节点数量多（7 分析师 + 辩手），
+   订阅按额度限流，全用 opus 很快撞上限。
+2. **🔴 凭据失效不再静默降级到计费 provider**。原实现里认证失败会走
+   `_SDKResultError` → 落进 `_FALLBACK_ERRORS` → 降级到按 token 计费的 provider。
+   用户开订阅模式就是为了避免账单，token 一过期就悄悄开始计费——正是启动护栏 F-004
+   想防的事，只是从启动时挪到了运行中。新增 `_AuthError`（**刻意不在** `_FALLBACK_ERRORS`
+   里）+ `_looks_like_auth_failure()` 正向识别，报错里直接给出 `claude setup-token` 修复步骤。
+
+   > 实测发现有必要：OAuth token 过期时 SDK 把它翻译成 `Claude Code returned an
+   > error result: success`，`ResultMessage.subtype` 仍是 `"success"` 而 `is_error=True`，
+   > 真正原因只出现在 `api_retry` 事件与助手文本里。用户看到那句话完全无从下手。
+3. **未采纳 PR 夹带的全局默认变更**：PR 把 `llm_provider` 默认从 `openai/gpt-5.4`
+   改成 `deepseek/deepseek-v4-pro`，那是贡献者个人偏好，会改变所有人的默认行为。
+4. **未采纳 PR 的 `docs/codebase-context/` 与 `specs/`**（约 600 行贡献者自用的
+   spec-driven 脚手架文档）。另外 PR 的 `factory.py` 基于较旧的 main，整体取用会
+   **回退 v0.2.20 的 `openai_compatible` provider**——已改为只补 4 行路由，
+   测试 `test_openai_compatible_is_routed_to_openai_client` 当场抓到了这个回退。
+
+### 依赖
+
+`[agentsdk]` 链路为 `claude-agent-sdk → mcp → httpx2`，**不碰 httpx**，与 mootdx 的
+`httpx<0.26` 无冲突（`uv lock --dry-run` 实测通过）。与 #87 中被移除的 `[google]`
+情况不同，无需单开 venv。PR 注释里「会与 mootdx 冲突」的说法已过时（mcp 已迁到 httpx2），一并订正。
+
+### 测试
+
+`pytest tests/` **201 passed / 1 skipped / 45 subtests**。新增认证失败识别、
+`_AuthError` 不参与降级、报错可操作性三组断言。端到端实跑验证链路可达
+（本机 OAuth token 已过期，正确地报出可操作错误而非静默降级）。
+
 ## [0.3.1] — 2026-07-31
 
 修三个静默失败 + 合并两个社区 PR。无破坏性变更。
