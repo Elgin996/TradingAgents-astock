@@ -54,17 +54,28 @@ extra 存在，`uv sync` 就对**所有人**失败，包括从不用 Gemini 的�
 
 感谢 [@wangyuxun6699](https://github.com/wangyuxun6699)。
 
-这些模型支持工具调用，但不接受 LangChain 结构化输出默认发送的 `tool_choice`，
-于是结构化阶段失败、退回自由文本 —— 多一次模型调用，且 Research Manager /
-Trader / Portfolio Manager 的输出格式不稳定，中文评级更容易解析失败。
+两类模型的结构化输出各自会失败、退回自由文本 —— 多一次模型调用，且
+Research Manager / Trader / Portfolio Manager 的输出格式不稳定，中文评级更容易
+解析失败：**DeepSeek V4 / reasoner** 不接受 LangChain 结构化输出默认发送的
+`tool_choice`；**MiniMax M2.x** 则是不支持 json_mode，且 `<think>` 内容会污染
+最终报告。（⚠️ PR 描述把两者都写成「不接受 tool_choice」，但其代码与测试明确
+声明 MiniMax `supports_tool_choice=True`——以代码为准，本地无 MiniMax key 无法
+实测，不据未验证的描述改动行为。）
 
 **这正是 v0.2.19「中文 TRADING SIGNAL 恒为 HOLD」的上游成因**：v0.2.19 修的是症状
 （让 `parse_rating` 认中文），本版修的是病因（结构化输出为什么会失败）。
 
 新增模型能力声明表 `llm_clients/capabilities.py`（精确 ID + 前缀匹配，未知模型
-保持宽松默认），对 DeepSeek V4/reasoner 与 MiniMax M2.x 抑制不兼容的 `tool_choice`、
-保留 Schema 工具绑定不再直接降级为自由文本，并为 MiniMax 启用 `reasoning_split`
-防止 `<think>` 内容污染最终报告。带前向兼容测试（`MiniMax-M3` 不继承 M2 行为）。
+保持宽松默认）：对 DeepSeek V4/reasoner 抑制不兼容的 `tool_choice` 并保留 Schema
+工具绑定（不再直接降级为自由文本），对 MiniMax M2.x 关闭 json_mode 并启用
+`reasoning_split` 防止 `<think>` 污染最终报告。带前向兼容测试（`MiniMax-M3`
+不继承 M2 行为、DeepSeek V3 家族不被 V4 结论误伤）。
+
+本版在 PR 基础上收紧两处：① `^deepseek-v\d` 会把 catalog 在售的 V3.2 与未来所有
+版本一并归类为「不接受 tool_choice」，而该结论只在 V4/reasoner 上实测过，被误伤的
+型号反而更容易退回自由文本——收窄为 `^deepseek-v4(?:$|[.-])`，与作者自己给 MiniMax
+写的 `^MiniMax-M2(?:$|[.-])` 同一把尺子。② 抑制 `tool_choice` 原用 `setdefault`，
+调用方显式传入时会被保留、能力声明形同虚设——改为 pop + 覆盖并 warning。
 
 ### 测试
 

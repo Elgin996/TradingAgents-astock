@@ -140,8 +140,9 @@ git clone https://github.com/simonlin1212/tradingagents-astock.git
 cd tradingagents-astock
 pip install -e .
 
-# (Optional) If you want to use Google Gemini models:
-pip install -e ".[google]"
+# (Optional) Google Gemini — there is no [google] extra; install it explicitly (see FAQ):
+pip install --no-deps "langchain-google-genai>=4.0.0"
+pip install "google-genai>=1.53.0" "httpx>=0.28.1"
 ```
 
 > **Ready to use after installation, no Docker required.** After installing, run `streamlit run web/app.py` (Web UI) or `tradingagents` (CLI) directly. See the "Web UI" and "CLI" sections below. Docker is only an optional deployment method and not needed for local development.
@@ -297,8 +298,21 @@ Older images did not pre-create the data directory. When the `docker-compose` na
 **Q: Some analyst reports (Sentiment/News/Fundamentals/Policy/Hot Money/Lock-up Expiry) are blank and not displayed?**
 These reports are generated after the corresponding Analyst calls data tools. **Empty reports are automatically skipped and not displayed.** The data sources themselves are healthy (Tencent/mootdx/Tonghuashun/Dongcai have been tested and return data). Reports are usually empty because **the selected model has weak tool-call capabilities** (e.g., some lightweight deepseek/minimax models are unstable when calling tools). It is recommended to switch to a model with more stable tool-calls (deepseek-chat / Tongyi / GLM-4 / Claude / GPT, etc.), or retry.
 
-**Q: After installing `[google]` (Gemini), pip reports an httpx conflict: mootdx requires `httpx<0.26` but google-genai requires `httpx>=0.28`?**
-First, a clarification: **litellm / mcp are not dependencies of this project**—if they are mentioned in the error, they are brought in by other packages in your environment and are unrelated to TradingAgents. The core installation of this project (`pip install -e .`) does not depend on httpx≥0.28, **and there is no conflict by default**; the conflict only arises when installing `[google]` for Gemini (mootdx and google-genai have mutually exclusive httpx version ranges). Solutions: ① **mootdx fetches quotes via TCP protocol and does not call httpx at runtime**, so httpx can be upgraded to a version that satisfies google-genai. The `incompatible` pip warning is just a warning and does not affect mootdx's operation (tested mootdx 0.11.7 works normally with httpx 0.28.1); ② Or separate the environment for running Gemini from the mootdx data layer into different venvs; ③ The simplest solution is to use domestic direct-connect models like MiniMax / DeepSeek / Tongyi, etc., avoiding the problem altogether by not installing `[google]`.
+**Q: Why is there no `[google]` extra any more? How do I install Gemini?**
+**The `[google]` extra was removed in v0.3.1** ([#87](https://github.com/simonlin1212/TradingAgents-astock/issues/87)). `langchain-google-genai>=4.0.0` requires `google-genai>=1.53.0`, and **every** google-genai release in that range requires `httpx>=0.28.1`, while mootdx (the core A-share data source) pins `httpx>=0.25,<0.26`. **No version combination satisfies both — the conflict is structural, not a bad pin.**
+
+The real damage: **uv builds a universal lock covering all extras**, so merely declaring the extra made `uv sync` fail for **everyone**, including users who never wanted Gemini. Leaving it empty would be worse (`pip install .[google]` would silently install nothing). So it was removed, and `google_client.py` now raises an ImportError containing the exact install commands.
+
+To use Gemini, install it explicitly (**mootdx speaks the TDX protocol over TCP and never imports httpx at runtime**, so raising httpx is safe in practice):
+
+```bash
+pip install --no-deps "langchain-google-genai>=4.0.0"
+pip install "google-genai>=1.53.0" "httpx>=0.28.1"
+```
+
+Or keep Gemini in a separate venv. Simplest of all: use DeepSeek / MiniMax / Qwen / any OpenAI-compatible gateway, which avoids the conflict entirely.
+
+One clarification: **litellm / mcp are not dependencies of this project** — if the error mentions them, they come from other packages in your environment.
 
 **Q: How to batch-run multiple tickers and get the same complete reports as the CLI without entering the CLI interactive mode?**
 See `examples/run_cases.py`: It reuses the CLI's `save_report_to_disk()` function, outputting for each ticker the same `complete_report.md` (with Analyst / Research / Trading / Risk / Portfolio five sections) and a fully-fledged `summary.json`. Usage: `uv run python examples/run_cases.py` (run all) or `uv run python examples/run_cases.py 688017` (single ticker); modify `build_config()` to switch providers/models.

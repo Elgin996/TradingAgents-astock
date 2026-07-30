@@ -121,3 +121,29 @@ def test_explicit_tool_choice_is_dropped_for_unsupported_model():
         client.with_structured_output(_Schema, tool_choice="required")
 
     assert parent.call_args.kwargs["tool_choice"] is None
+
+
+@pytest.mark.unit
+def test_optional_tool_call_returning_none_still_falls_back_to_free_text():
+    """tool_choice=None 让 schema 工具变成可选：模型若返回纯文本，
+    LangChain 解析器给出 None。此时必须退回自由文本，而不是让节点失败。
+
+    这一条锁住 PR #83 的行为边界——最坏情况与 PR 之前等价（都走自由文本），
+    不存在「拿不到结构化就崩」的回归。
+    """
+    from unittest.mock import MagicMock
+    from tradingagents.agents.utils.structured import invoke_structured_or_freetext
+
+    structured = MagicMock()
+    structured.invoke.return_value = None          # 模型没调工具
+
+    plain = MagicMock()
+    plain.invoke.return_value = MagicMock(content="free text fallback")
+
+    def render(obj):                                # 真实 render 会对 None 抛 AttributeError
+        return f"**Action**: {obj.action}"
+
+    out = invoke_structured_or_freetext(structured, plain, "p", render, "Trader")
+
+    assert out == "free text fallback"
+    plain.invoke.assert_called_once()
