@@ -100,3 +100,24 @@ def test_deepseek_v3_family_keeps_permissive_defaults():
 def test_deepseek_v4_family_still_matched_by_pattern():
     for model in ("deepseek-v4", "deepseek-v4.1", "deepseek-v4-turbo"):
         assert get_capabilities(model).supports_tool_choice is False
+
+
+@pytest.mark.unit
+def test_explicit_tool_choice_is_dropped_for_unsupported_model():
+    """能力表声明「不支持 tool_choice」就必须真正生效。
+    原实现用 setdefault，调用方显式传入时会被保留，API 调用照样失败。"""
+    from unittest.mock import patch
+    from langchain_openai import ChatOpenAI
+    from tradingagents.llm_clients.openai_client import DeepSeekChatOpenAI
+
+    client = DeepSeekChatOpenAI(model="deepseek-v4-pro", api_key="x")
+
+    class _Schema(BaseModel):
+        value: str
+
+    # 必须 patch 到 ChatOpenAI（再上一层）——patch NormalizedChatOpenAI 会把
+    # 待测实现本身替换掉，测试就永远绿。
+    with patch.object(ChatOpenAI, "with_structured_output", return_value="ok") as parent:
+        client.with_structured_output(_Schema, tool_choice="required")
+
+    assert parent.call_args.kwargs["tool_choice"] is None

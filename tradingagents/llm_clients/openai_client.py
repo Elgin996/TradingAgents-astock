@@ -1,3 +1,4 @@
+import logging
 import os
 from typing import Any, Optional
 
@@ -7,6 +8,8 @@ from langchain_openai import ChatOpenAI
 from .base_client import BaseLLMClient, normalize_content
 from .capabilities import get_capabilities
 from .validators import validate_model
+
+logger = logging.getLogger(__name__)
 
 
 class NormalizedChatOpenAI(ChatOpenAI):
@@ -36,8 +39,18 @@ class NormalizedChatOpenAI(ChatOpenAI):
         method = method or capabilities.preferred_structured_method
         # DeepSeek V4/reasoner accept the schema as a tool, but reject
         # LangChain's function-spec ``tool_choice`` parameter.
+        # Use pop-and-override rather than setdefault: with setdefault an
+        # explicitly passed tool_choice survives and the API call still fails,
+        # so the declared capability would not actually be enforced.
         if method == "function_calling" and not capabilities.supports_tool_choice:
-            kwargs.setdefault("tool_choice", None)
+            caller_value = kwargs.pop("tool_choice", None)
+            if caller_value is not None:
+                logger.warning(
+                    "Dropping tool_choice=%r for %s: this model rejects the "
+                    "parameter (see llm_clients/capabilities.py).",
+                    caller_value, self.model_name,
+                )
+            kwargs["tool_choice"] = None
         return super().with_structured_output(schema, method=method, **kwargs)
 
 
