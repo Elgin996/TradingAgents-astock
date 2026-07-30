@@ -443,3 +443,32 @@ def test_web_all_scope_keeps_separate_quick_model():
 
     assert config["agent_sdk_model"] == "opus"
     assert config["agent_sdk_quick_model"] == "sonnet"     # 未被 opus 覆盖
+
+
+@pytest.mark.parametrize(
+    "fb_provider,fb_model,should_raise",
+    [
+        ("anthropic", None, True),      # 只给 provider → 会配上主 provider 的模型名
+        (None, "claude-opus-4-6", True),  # 只给 model
+        ("anthropic", "claude-opus-4-6", False),
+        (None, None, False),            # 都不给 → 回落 llm_provider + 自身模型
+    ],
+)
+def test_fallback_provider_and_model_must_be_configured_together(
+    fb_provider, fb_model, should_raise, monkeypatch
+):
+    """降级路径恰好在撞额度时才被走到，配错要在启动时暴露而不是运行中。"""
+    monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+    from tradingagents.default_config import DEFAULT_CONFIG
+
+    config = dict(DEFAULT_CONFIG)
+    config["deep_think_provider_override"] = "claude_agent_sdk"
+    config["agent_sdk_fallback_provider"] = fb_provider
+    config["agent_sdk_fallback_model"] = fb_model
+
+    deep_on = config.get("deep_think_provider_override") == "claude_agent_sdk"
+    quick_on = config.get("quick_think_provider_override") == "claude_agent_sdk"
+    p, m = config.get("agent_sdk_fallback_provider"), config.get("agent_sdk_fallback_model")
+    mismatched = (deep_on or quick_on) and bool(p) != bool(m)
+
+    assert mismatched is should_raise

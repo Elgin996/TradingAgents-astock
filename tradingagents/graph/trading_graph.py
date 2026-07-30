@@ -183,13 +183,30 @@ class TradingAgentsGraph:
                 "the subscription, or clear the override."
             )
 
+        # 降级配置必须成对给：只改 provider 不改 model，会把主 provider 的模型名
+        # 配到另一家去（如 AnthropicClient(model="deepseek-chat")），而这条路径
+        # **恰好在撞额度、最需要它工作的时候才被走到**——那时再炸就太晚了。
+        # 启动时就校验，而不是留到运行中。
+        _fb_provider = self.config.get("agent_sdk_fallback_provider")
+        _fb_model = self.config.get("agent_sdk_fallback_model")
+        if (deep_on or quick_on) and bool(_fb_provider) != bool(_fb_model):
+            missing = "agent_sdk_fallback_model" if _fb_provider else "agent_sdk_fallback_provider"
+            given = "agent_sdk_fallback_provider" if _fb_provider else "agent_sdk_fallback_model"
+            raise ValueError(
+                f"{given} is set but {missing} is not — the two must be configured "
+                f"together. Otherwise the fallback pairs one provider with another "
+                f"provider's model name and fails exactly when the subscription hits "
+                f"its quota. Set both, or leave both unset to fall back to "
+                f"llm_provider + its own model."
+            )
+
         def _make_client(override_on, sdk_model_key, fallback_model_key):
             """Build a subscription-backed client when overridden, else the normal
             llm_provider client. Fallback rejoins the paid provider on quota/failure."""
             if override_on:
                 fallback_spec = {
-                    "provider": self.config.get("agent_sdk_fallback_provider") or self.config["llm_provider"],
-                    "model": self.config.get("agent_sdk_fallback_model") or self.config[fallback_model_key],
+                    "provider": _fb_provider or self.config["llm_provider"],
+                    "model": _fb_model or self.config[fallback_model_key],
                     "base_url": self.config.get("backend_url"),
                 }
                 return create_llm_client(
