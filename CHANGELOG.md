@@ -6,6 +6,71 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.3.1] — 2026-07-31
+
+修三个静默失败 + 合并两个社区 PR。无破坏性变更。
+
+### 修复：`uv sync` 因 `[google]` extra 的无解冲突而对所有人失败（#87）
+
+感谢 [@jakeparkcolde](https://github.com/jakeparkcolde) 的高质量报告与复现步骤。
+
+`langchain-google-genai>=4.0.0` 要求 `google-genai>=1.53.0`，而该区间内**每一个**
+google-genai 版本都要求 `httpx>=0.28.1`；`mootdx`（核心 A 股数据源）钉死
+`httpx>=0.25,<0.26`。**没有任何版本组合能同时满足——冲突是结构性的，不是坏 pin。**
+
+真正的杀伤力在于：**uv 构建的是覆盖所有 extra 的 universal lock**，所以只要这个
+extra 存在，`uv sync` 就对**所有人**失败，包括从不用 Gemini 的用户。
+
+- **移除 `[google]` extra**。留空更糟——`pip install .[google]` 会静默什么都不装，
+  用户以为装好了，直到运行期才炸。
+- `google_client.py` 导入失败时抛出**带可直接执行安装命令**的 `ImportError`，
+  而不是裸 `ModuleNotFoundError`（沿用 v0.2.17 处理 fpdf 的做法）。
+- `tests/test_google_api_key.py` 改为缺依赖时 skip——此前它会让 `pytest tests/`
+  **在收集阶段整体中断**，一个测试都跑不了。
+- `mootdx` 下限 `0.10.0` → `0.11.7`：放宽会让 uv 回溯到要求 `pandas<1.3.5` 的
+  远古版本，报出与真实成因无关的 pandas 冲突，把真正的 httpx 问题盖住。
+
+实测 `uv lock` 由失败转为成功解析。
+
+### 修复：A 股历史决策回报永远查不到，记忆闭环从未生效（社区 PR #84）
+
+感谢 [@wangyuxun6699](https://github.com/wangyuxun6699)。
+
+`_fetch_returns` 把裸六位码直接传给 yfinance，而同一函数里 benchmark 用的却是
+`"000300.SS"`（带后缀）。yfinance 对裸码返回空表 → `len(stock) < 2` → 返回 None
+→ **记忆条目永久 pending**，且被 `except Exception` 吞成 warning。
+实测：`600519` → 0 行、`600519.SS` → 10 行；`000001` → 0 行、`000001.SZ` → 10 行。
+等于 agent「从历史决策学习」的能力对 A 股一直是空转。
+
+新增 `_normalize_yfinance_ticker()`：沪市 → `.SS`、深市 → `.SZ`，
+`SH600519` / `600519.SH` 等写法一并归一，非 A 股代码原样返回。
+
+**本版在 PR 基础上补了一条**：Yahoo **完全不覆盖北交所**（实测 `920002` 的裸码 /
+`.BJ` / `.SS` / `.SZ` 四种写法全部返回空表）。PR 正确地没有硬造后缀，但这样北交所
+条目会每次运行白发一次网络请求、且永远 pending 不给任何理由。新增
+`_is_unsupported_by_yfinance()` 直接短路并明确写清原因。
+
+### 修复：DeepSeek V4 / MiniMax M2.x 结构化输出不稳定（社区 PR #83）
+
+感谢 [@wangyuxun6699](https://github.com/wangyuxun6699)。
+
+这些模型支持工具调用，但不接受 LangChain 结构化输出默认发送的 `tool_choice`，
+于是结构化阶段失败、退回自由文本 —— 多一次模型调用，且 Research Manager /
+Trader / Portfolio Manager 的输出格式不稳定，中文评级更容易解析失败。
+
+**这正是 v0.2.19「中文 TRADING SIGNAL 恒为 HOLD」的上游成因**：v0.2.19 修的是症状
+（让 `parse_rating` 认中文），本版修的是病因（结构化输出为什么会失败）。
+
+新增模型能力声明表 `llm_clients/capabilities.py`（精确 ID + 前缀匹配，未知模型
+保持宽松默认），对 DeepSeek V4/reasoner 与 MiniMax M2.x 抑制不兼容的 `tool_choice`、
+保留 Schema 工具绑定不再直接降级为自由文本，并为 MiniMax 启用 `reasoning_split`
+防止 `<think>` 内容污染最终报告。带前向兼容测试（`MiniMax-M3` 不继承 M2 行为）。
+
+### 测试
+
+`pytest tests/` **169 passed / 1 skipped / 45 subtests**，且现在**开箱即可运行**
+（此前缺 langchain-google-genai 会导致收集阶段整体中断）。
+
 ## [0.3.0] — 2026-07-24
 
 明确项目定位为「框架的工程实现与研究复现」，并**移除可执行价位相关能力**。**有破坏性变更**（见下）。

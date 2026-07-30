@@ -149,8 +149,9 @@ git clone https://github.com/simonlin1212/tradingagents-astock.git
 cd tradingagents-astock
 pip install -e .
 
-# 如需使用 Google Gemini 模型（可选）：
-pip install -e ".[google]"
+# 如需使用 Google Gemini 模型（无 [google] extra，需显式装，见下方 FAQ）：
+pip install --no-deps "langchain-google-genai>=4.0.0"
+pip install "google-genai>=1.53.0" "httpx>=0.28.1"
 ```
 
 > **装完即可用，无需 Docker。** 安装后直接跑 `streamlit run web/app.py`（Web UI）或 `tradingagents`（CLI）即可，详见下方「Web UI」「CLI 方式」两节。Docker 仅是可选的部署方式，本地开发不需要。
@@ -316,8 +317,21 @@ v0.2.12 起 Dockerfile 已内置 `fonts-noto-cjk`，重新 `docker build` 即可
 **Q: 部分分析师报告（情绪/新闻/基本面/政策/游资/解禁）空白不显示？**
 这些报告由对应 Analyst 调用数据工具后生成，**空报告会被自动跳过不显示**。数据源本身是健康的（腾讯/mootdx/同花顺/东财实测出数）；报告为空通常是**所选模型 tool-call 能力弱**（如部分 deepseek/minimax 轻量模型不稳定地调用工具）。建议换用 tool-call 更稳的模型（deepseek-chat / 通义 / GLM-4 / Claude / GPT 等），或重试。
 
-**Q: 装 `[google]`（Gemini）后 pip 报 httpx 冲突：mootdx 要 `httpx<0.26`、google-genai 要 `httpx>=0.28`？**
-先澄清：**litellm / mcp 不是本项目的依赖**——报错里若提到它们，是你环境里其它包带来的，与 TradingAgents 无关。本项目核心安装（`pip install -e .`）不依赖 httpx≥0.28，**默认不冲突**；冲突只在装 `[google]` 用 Gemini 时出现（mootdx 与 google-genai 的 httpx 上下限互斥）。解法：① **mootdx 取行情走 TCP 协议、运行时根本不调用 httpx**，可让 httpx 升到满足 google-genai 的版本，pip 那条 `incompatible` 只是警告、不影响 mootdx 运行（实测 mootdx 0.11.7 在 httpx 0.28.1 下取数正常）；② 或把跑 Gemini 的环境与 mootdx 数据层分到不同 venv；③ 最省心是用 MiniMax / DeepSeek / 通义等国内直连模型，不装 `[google]` 就没这问题。
+**Q: 为什么没有 `[google]` extra 了？装 Gemini 报 httpx 冲突怎么办？**
+**v0.3.1 起移除了 `[google]` extra**（[#87](https://github.com/simonlin1212/TradingAgents-astock/issues/87)）。原因：`langchain-google-genai>=4.0.0` 要求 `google-genai>=1.53.0`，而该区间内**每一个** google-genai 版本都要求 `httpx>=0.28.1`；mootdx（核心 A 股数据源）钉死 `httpx>=0.25,<0.26`。**没有任何版本组合能同时满足，冲突是结构性的。**
+
+真正的问题是：**uv 构建的是覆盖所有 extra 的 universal lock**，所以只要这个 extra 存在，`uv sync` 就对**所有人**失败——包括从不用 Gemini 的用户。把 extra 留空更糟（`pip install .[google]` 会静默什么都不装，用户以为装好了）。所以直接移除，并在 `google_client.py` 导入失败时给出可直接执行的安装命令。
+
+需要 Gemini 时显式安装（**mootdx 取行情走 TCP 协议、运行时根本不 import httpx**，所以抬高 httpx 实测不影响取数）：
+
+```bash
+pip install --no-deps "langchain-google-genai>=4.0.0"
+pip install "google-genai>=1.53.0" "httpx>=0.28.1"
+```
+
+或把 Gemini 与数据层分到不同 venv。最省心是用 DeepSeek / MiniMax / 通义 / OpenAI 兼容中继等，完全不涉及这个冲突。
+
+另澄清：**litellm / mcp 不是本项目的依赖**——报错里若提到它们，是你环境里其它包带来的。
 
 **Q: 不进 CLI 交互，怎么批量跑多只标的、拿到和 CLI 一样的完整报告？**
 看 `examples/run_cases.py`：它复用 CLI 的 `save_report_to_disk()`，每只标的输出与 CLI 一致的 `complete_report.md`（分析师 / 研究 / 交易 / 风险 / 组合五个分区）+ 一份字段齐全的 `summary.json`。用法：`uv run python examples/run_cases.py`（跑全部）或 `uv run python examples/run_cases.py 688017`（单只）；改 `build_config()` 切换 provider/model。

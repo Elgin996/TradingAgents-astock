@@ -55,6 +55,78 @@ from .reflection import Reflector
 from .signal_processing import SignalProcessor
 
 
+def _normalize_yfinance_ticker(ticker: str) -> str:
+    """Return the Yahoo Finance symbol for a ticker used by the graph.
+
+    A-stock decisions are stored with their six-digit code (for example
+    ``600519``), while Yahoo Finance requires an exchange suffix for mainland
+    China listings (``600519.SS``).  Without the suffix ``Ticker.history``
+    usually returns an empty frame, so deferred memory outcomes remain pending
+    indefinitely.  Common A-share prefixes/suffixes are normalized as well;
+    non-A-share symbols remain unchanged so the graph remains usable for other
+    markets too.
+    """
+    symbol = str(ticker).strip().upper()
+
+    # The A-stock layer accepts SH/SZ/BJ prefixes and uses .SH for Shanghai,
+    # whereas Yahoo uses .SS.  Normalize those forms before handling bare
+    # six-digit codes. Yahoo has no Beijing exchange suffix, so keep BJ codes
+    # unqualified instead of inventing a symbol that cannot return data.
+    if (
+        len(symbol) == 9
+        and symbol[:6].isdigit()
+        and symbol[6:] in (".SH", ".SZ", ".BJ")
+    ):
+        code, exchange = symbol[:6], symbol[7:]
+        if exchange == "SH":
+            return f"{code}.SS"
+        if exchange == "SZ":
+            return f"{code}.SZ"
+        return code
+    if (
+        len(symbol) == 8
+        and symbol[:2] in ("SH", "SZ", "BJ")
+        and symbol[2:].isdigit()
+    ):
+        code, exchange = symbol[2:], symbol[:2]
+        if exchange == "SH":
+            return f"{code}.SS"
+        if exchange == "SZ":
+            return f"{code}.SZ"
+        return code
+
+    if len(symbol) != 6 or not symbol.isdigit():
+        return symbol
+
+    # The 920xxx range is Beijing-listed; Yahoo has no supported suffix for it.
+    if symbol.startswith("92"):
+        return symbol
+    # Shanghai-listed A shares, B shares and ETFs use the .SS suffix on Yahoo.
+    if symbol.startswith(("5", "6", "9")):
+        return f"{symbol}.SS"
+    # Other Beijing-listed six-digit ranges are not covered by Yahoo either.
+    if symbol.startswith(("4", "8")):
+        return symbol
+    # Shenzhen-listed stocks (000/001/002/003/300/301, etc.).
+    return f"{symbol}.SZ"
+
+
+def _is_unsupported_by_yfinance(symbol: str) -> bool:
+    """True for codes Yahoo Finance has no coverage for at all.
+
+    Beijing Stock Exchange listings (920xxx current, 43x/83x/87x legacy) are
+    absent from Yahoo under every suffix — verified 2026-07-31: ``920002``,
+    ``920002.BJ``, ``920002.SS`` and ``920002.SZ`` all return an empty frame.
+    Retrying them every run only burns a request and leaves the memory entry
+    pending forever with no stated reason, so short-circuit and say why once.
+    """
+    return (
+        len(symbol) == 6
+        and symbol.isdigit()
+        and (symbol.startswith("92") or symbol[:2] in ("43", "83", "87"))
+    )
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -238,7 +310,18 @@ class TradingAgentsGraph:
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
 
-            stock = yf.Ticker(ticker).history(start=trade_date, end=end_str)
+            yf_symbol = _normalize_yfinance_ticker(ticker)
+            if _is_unsupported_by_yfinance(yf_symbol):
+                # Say why instead of leaving a silent forever-pending entry.
+                logger.warning(
+                    "Cannot resolve outcome for %s: Yahoo Finance has no Beijing "
+                    "Stock Exchange coverage under any suffix, so this entry stays "
+                    "pending. Use a non-BSE ticker if you need memory reflection.",
+                    ticker,
+                )
+                return None, None, None
+
+            stock = yf.Ticker(yf_symbol).history(start=trade_date, end=end_str)
             benchmark = yf.Ticker("000300.SS").history(start=trade_date, end=end_str)
 
             if len(stock) < 2 or len(benchmark) < 2:
