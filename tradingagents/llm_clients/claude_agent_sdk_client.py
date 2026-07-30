@@ -509,9 +509,16 @@ class ClaudeAgentSDKClient(BaseLLMClient):
         text = "".join(text_parts)
         if result_msg is not None:
             if getattr(result_msg, "is_error", False):
+                # 401 也可能只出现在 ResultMessage 上（没有 api_retry 事件、
+                # 也没有合成助手文本）。这条必须先于下面的通用分支判：
+                # _SDKResultError 在 _FALLBACK_ERRORS 里，漏判就会静默降级到
+                # 按 token 计费的 provider——正好违背「不产生 API 账单」的承诺。
+                status = getattr(result_msg, "api_error_status", None)
+                if status == 401 or str(status) == "401":
+                    raise _AuthError(_auth_failure_hint(result_msg))
                 raise _SDKResultError(
                     f"stop_reason={getattr(result_msg, 'stop_reason', None)} "
-                    f"api_error_status={getattr(result_msg, 'api_error_status', None)}"
+                    f"api_error_status={status}"
                 )
             structured = getattr(result_msg, "structured_output", None)
             final = getattr(result_msg, "result", None)

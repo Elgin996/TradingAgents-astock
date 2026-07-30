@@ -64,6 +64,14 @@ Breaking changes within the 0.x line are called out explicitly.
 - **Web UI「所有节点」把深度模型复制给了 quick 节点**，覆盖掉 sonnet 默认值——
   7 个分析师 + 辩手全跑 opus 会让订阅额度烧得极快，且与文档所述矛盾。
 
+- **401 只出现在 `ResultMessage` 时被漏判**：该路径会落进 `_SDKResultError`
+  → `_FALLBACK_ERRORS` → **静默降级到计费 provider**，正好违背「不产生 API 账单」
+  这条承诺。改为先判 `api_error_status == 401` 再走通用分支。
+- **降级客户端没带 callbacks**：降级意味着开始计费，而统计/成本回调恰好在
+  花钱的时候看不到这些调用。已把 callbacks 一并传入。
+- **跨 provider 降级仍转发主 provider 的 `backend_url`**（如把 anthropic 请求发到
+  MiniMax 网关）——显式指定另一家时改为不带端点，让其用自己的默认地址。
+
 ### 依赖
 
 `[agentsdk]` 链路为 `claude-agent-sdk → mcp → httpx2`，**不碰 httpx**，与 mootdx 的
@@ -72,7 +80,7 @@ Breaking changes within the 0.x line are called out explicitly.
 
 ### 测试
 
-`pytest tests/` **211 passed / 1 skipped / 45 subtests**。新增认证失败识别、
+`pytest tests/` **213 passed / 1 skipped / 45 subtests**。新增认证失败识别、
 `_AuthError` 不参与降级、报错可操作性三组断言。端到端实跑验证链路可达
 （本机 OAuth token 已过期，正确地报出可操作错误而非静默降级）。
 

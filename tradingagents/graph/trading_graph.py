@@ -218,6 +218,9 @@ class TradingAgentsGraph:
                     "provider": _fb_provider or self.config["llm_provider"],
                     "model": _fb_model or self.config[fallback_model_key],
                     "base_url": None if cross_provider else self.config.get("backend_url"),
+                    # 带上 callbacks：降级意味着**开始计费**，此时统计/成本回调
+                    # 反而看不到这些调用的话，恰好在花钱的时候统计是瞎的。
+                    **({"callbacks": self.callbacks} if self.callbacks else {}),
                 }
                 return create_llm_client(
                     provider="claude_agent_sdk",

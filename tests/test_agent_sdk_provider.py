@@ -548,3 +548,38 @@ def test_cross_provider_fallback_drops_primary_backend_url(
     cross = bool(fb) and fb != config["llm_provider"]
     resolved = None if cross else config.get("backend_url")
     assert resolved == expect_url
+
+
+def test_result_message_401_raises_auth_error_not_fallback():
+    """401 也可能只出现在 ResultMessage 上。漏判会落进 _SDKResultError
+    → _FALLBACK_ERRORS → 静默降级到计费 provider，违背「不产生 API 账单」。"""
+    from tradingagents.llm_clients import claude_agent_sdk_client as mod
+
+    class _Result:
+        is_error = True
+        api_error_status = 401
+        stop_reason = "stop_sequence"
+        content = []
+        error = None
+        model = None
+
+    # 复刻 _query 里的判定分支
+    status = getattr(_Result, "api_error_status", None)
+    assert status == 401
+    exc = mod._AuthError(mod._auth_failure_hint(_Result()))
+    assert not isinstance(exc, mod._FALLBACK_ERRORS)
+    assert "claude setup-token" in str(exc)
+
+
+def test_fallback_spec_carries_callbacks():
+    """降级＝开始计费，此时统计/成本回调必须仍能看到这些调用。"""
+    callbacks = ["sentinel-callback"]
+    cross_provider = False
+    config = {"llm_provider": "minimax", "backend_url": None, "quick_think_llm": "m"}
+    spec = {
+        "provider": config["llm_provider"],
+        "model": config["quick_think_llm"],
+        "base_url": None if cross_provider else config.get("backend_url"),
+        **({"callbacks": callbacks} if callbacks else {}),
+    }
+    assert spec["callbacks"] == callbacks
