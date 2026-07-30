@@ -209,10 +209,15 @@ class TradingAgentsGraph:
             """Build a subscription-backed client when overridden, else the normal
             llm_provider client. Fallback rejoins the paid provider on quota/failure."""
             if override_on:
+                # backend_url 是为 llm_provider 配的端点。显式指定了**另一家**
+                # provider 做降级时不能把它带过去（例如把 anthropic 降级请求发到
+                # MiniMax 网关），否则同样是撞额度那一刻才炸。None ⇒ 该 provider
+                # 用自己的默认端点。
+                cross_provider = bool(_fb_provider) and _fb_provider != self.config["llm_provider"]
                 fallback_spec = {
                     "provider": _fb_provider or self.config["llm_provider"],
                     "model": _fb_model or self.config[fallback_model_key],
-                    "base_url": self.config.get("backend_url"),
+                    "base_url": None if cross_provider else self.config.get("backend_url"),
                 }
                 return create_llm_client(
                     provider="claude_agent_sdk",

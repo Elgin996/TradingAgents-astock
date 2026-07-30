@@ -522,3 +522,29 @@ def test_sdk_subprocess_env_blanks_anthropic_api_key(monkeypatch):
     env = getattr(opts, "env", None) or {}
     assert env.get("ANTHROPIC_API_KEY") == ""
     assert os.environ["ANTHROPIC_API_KEY"] == "sk-should-not-leak"
+
+
+@pytest.mark.parametrize(
+    "llm_provider,fb_provider,backend_url,expect_url",
+    [
+        ("minimax", "anthropic", "https://minimax.gw/v1", None),   # 跨家 → 不带
+        ("minimax", "minimax", "https://minimax.gw/v1", "https://minimax.gw/v1"),
+        ("minimax", None, "https://minimax.gw/v1", "https://minimax.gw/v1"),  # 未指定 → 沿用
+    ],
+)
+def test_cross_provider_fallback_drops_primary_backend_url(
+    llm_provider, fb_provider, backend_url, expect_url
+):
+    """backend_url 是给 llm_provider 配的端点，把它转发给另一家 provider
+    会在撞额度真要降级时才炸。"""
+    config = {
+        "llm_provider": llm_provider,
+        "backend_url": backend_url,
+        "agent_sdk_fallback_provider": fb_provider,
+        "agent_sdk_fallback_model": "m" if fb_provider else None,
+        "quick_think_llm": "primary-model",
+    }
+    fb = config.get("agent_sdk_fallback_provider")
+    cross = bool(fb) and fb != config["llm_provider"]
+    resolved = None if cross else config.get("backend_url")
+    assert resolved == expect_url

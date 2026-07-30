@@ -72,7 +72,7 @@ Breaking changes within the 0.x line are called out explicitly.
 
 ### 测试
 
-`pytest tests/` **208 passed / 1 skipped / 45 subtests**。新增认证失败识别、
+`pytest tests/` **211 passed / 1 skipped / 45 subtests**。新增认证失败识别、
 `_AuthError` 不参与降级、报错可操作性三组断言。端到端实跑验证链路可达
 （本机 OAuth token 已过期，正确地报出可操作错误而非静默降级）。
 
