@@ -236,9 +236,11 @@ def _render_llm_config() -> None:
                 "`agent_sdk_quick_model` 设为 `sonnet` 降低消耗（默认已是）。"
             )
         if os.getenv("ANTHROPIC_API_KEY"):
-            st.warning(
-                "检测到 ANTHROPIC_API_KEY —— 启用订阅时它会被优先、悄悄走 API 计费，"
-                "启动护栏会直接报错中止。请在 .env 清空 ANTHROPIC_API_KEY 后重启 Web。"
+            st.info(
+                "检测到 ANTHROPIC_API_KEY。它**不会**泄进 Agent SDK 子进程"
+                "（已在子进程环境显式置空），所以订阅额度照常生效；"
+                "父进程保留它，是为了让 `anthropic` 仍能作为撞额度后的降级 provider。"
+                "如果你并不打算保留付费降级，可在 .env 里清掉它。"
             )
 
 

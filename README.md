@@ -453,11 +453,11 @@ pip install -e ".[agentsdk]"
 # 本机 claude 已登录即可；headless / CI 环境需要显式 token：
 claude setup-token          # 输出的 token 设为 CLAUDE_CODE_OAUTH_TOKEN
 
-# 关键：清掉 ANTHROPIC_API_KEY
+# 不打算保留付费降级的话，顺手清掉（可选）
 unset ANTHROPIC_API_KEY
 ```
 
-⚠️ **`ANTHROPIC_API_KEY` 优先级高于订阅 token**，留着它会悄悄走 API 计费。启动护栏检测到二者共存会**直接报错中止**，而不是让你事后看账单才发现。
+关于 `ANTHROPIC_API_KEY`：它的优先级高于订阅凭据，**但不会泄进 Agent SDK 子进程**——客户端在子进程环境里已把它显式置空，订阅额度照常生效。父进程保留它是为了让 `anthropic` 仍能作为撞额度后的降级 provider（否则就成死结：留着启动被拦、删掉又在真要降级时认证失败）。启动时只告警不中止。
 
 #### 2. 开启
 
