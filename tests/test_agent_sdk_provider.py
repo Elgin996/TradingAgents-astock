@@ -583,3 +583,19 @@ def test_fallback_spec_carries_callbacks():
         **({"callbacks": callbacks} if callbacks else {}),
     }
     assert spec["callbacks"] == callbacks
+
+
+def test_tuple_messages_are_not_silently_emptied():
+    """Reflector.reflect_on_final_decision() 传的是 (role, content) 元组。
+    不支持这种形状会让两条消息双双变空串——SDK 收到空 prompt 却照常返回内容，
+    是「不报错的错答案」。"""
+    from tradingagents.llm_clients.claude_agent_sdk_client import (
+        _msg_role_content, _split_prompt,
+    )
+
+    assert _msg_role_content(("system", "SYS")) == ("system", "SYS")
+    assert _msg_role_content(("human", "USER")) == ("human", "USER")
+
+    system, user = _split_prompt([("system", "SYS"), ("human", "USER")])
+    assert system == "SYS"
+    assert "USER" in user

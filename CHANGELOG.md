@@ -72,6 +72,11 @@ Breaking changes within the 0.x line are called out explicitly.
 - **跨 provider 降级仍转发主 provider 的 `backend_url`**（如把 anthropic 请求发到
   MiniMax 网关）——显式指定另一家时改为不带端点，让其用自己的默认地址。
 
+- **`(role, content)` 元组消息被静默清空**：`Reflector.reflect_on_final_decision()`
+  传的正是 `[("system", ...), ("human", ...)]`，而消息解析只认 BaseMessage 与 dict，
+  元组走 `getattr` 取不到字段 → 两条消息双双变空串 → SDK 收到空 prompt **却照常
+  返回内容**，是「不报错的错答案」。quick 节点走订阅时这条路径是活的。
+
 ### 依赖
 
 `[agentsdk]` 链路为 `claude-agent-sdk → mcp → httpx2`，**不碰 httpx**，与 mootdx 的
@@ -80,7 +85,7 @@ Breaking changes within the 0.x line are called out explicitly.
 
 ### 测试
 
-`pytest tests/` **213 passed / 1 skipped / 45 subtests**。新增认证失败识别、
+`pytest tests/` **214 passed / 1 skipped / 45 subtests**。新增认证失败识别、
 `_AuthError` 不参与降级、报错可操作性三组断言。端到端实跑验证链路可达
 （本机 OAuth token 已过期，正确地报出可操作错误而非静默降级）。
 

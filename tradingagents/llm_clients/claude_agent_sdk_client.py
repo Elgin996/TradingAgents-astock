@@ -157,9 +157,18 @@ _FALLBACK_ERRORS = (ClaudeSDKError, _RateLimitHit, _SDKResultError)
 # --------------------------------------------------------------------------- #
 
 def _msg_role_content(message: Any):
-    """Extract (role, content) from a LangChain BaseMessage or a plain dict."""
+    """Extract (role, content) from a LangChain BaseMessage / dict / (role, content) 元组。
+
+    ⚠️ 元组这条分支是必须的：`Reflector.reflect_on_final_decision()` 传的就是
+    `[("system", ...), ("human", ...)]`。缺了它 getattr 取不到 type/content，
+    两条消息双双变成空串，SDK 收到空 prompt 却照常返回内容——**不报错的错答案**。
+    quick 节点走订阅时这条路径是活的（记忆反思用 quick_thinking_llm）。
+    """
     if isinstance(message, dict):
         return message.get("role"), str(message.get("content", ""))
+    if isinstance(message, (tuple, list)) and len(message) == 2:
+        role, content = message
+        return role, content if isinstance(content, str) else str(content)
     role = getattr(message, "type", None)  # BaseMessage.type: 'system'/'human'/'ai'
     content = getattr(message, "content", "")
     return role, content if isinstance(content, str) else str(content)
