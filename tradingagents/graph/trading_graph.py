@@ -111,6 +111,22 @@ def _normalize_yfinance_ticker(ticker: str) -> str:
     return f"{symbol}.SZ"
 
 
+def _is_unsupported_by_yfinance(symbol: str) -> bool:
+    """True for codes Yahoo Finance has no coverage for at all.
+
+    Beijing Stock Exchange listings (920xxx current, 43x/83x/87x legacy) are
+    absent from Yahoo under every suffix — verified 2026-07-31: ``920002``,
+    ``920002.BJ``, ``920002.SS`` and ``920002.SZ`` all return an empty frame.
+    Retrying them every run only burns a request and leaves the memory entry
+    pending forever with no stated reason, so short-circuit and say why once.
+    """
+    return (
+        len(symbol) == 6
+        and symbol.isdigit()
+        and (symbol.startswith("92") or symbol[:2] in ("43", "83", "87"))
+    )
+
+
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -294,9 +310,18 @@ class TradingAgentsGraph:
             end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
             end_str = end.strftime("%Y-%m-%d")
 
-            stock = yf.Ticker(_normalize_yfinance_ticker(ticker)).history(
-                start=trade_date, end=end_str
-            )
+            yf_symbol = _normalize_yfinance_ticker(ticker)
+            if _is_unsupported_by_yfinance(yf_symbol):
+                # Say why instead of leaving a silent forever-pending entry.
+                logger.warning(
+                    "Cannot resolve outcome for %s: Yahoo Finance has no Beijing "
+                    "Stock Exchange coverage under any suffix, so this entry stays "
+                    "pending. Use a non-BSE ticker if you need memory reflection.",
+                    ticker,
+                )
+                return None, None, None
+
+            stock = yf.Ticker(yf_symbol).history(start=trade_date, end=end_str)
             benchmark = yf.Ticker("000300.SS").history(start=trade_date, end=end_str)
 
             if len(stock) < 2 or len(benchmark) < 2:
