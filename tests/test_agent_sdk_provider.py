@@ -11,6 +11,8 @@ guardrail trips on it, so tests that enable the provider must delenv it first
 
 import json
 
+import os
+
 import pytest
 from pydantic import BaseModel
 
@@ -255,16 +257,29 @@ def test_split_prompt_messages_extracts_system():
 # T-005 / F-004: startup guardrail + AC-004 no-behaviour-change
 # --------------------------------------------------------------------------- #
 
-def test_guardrail_refuses_api_key_coexistence(monkeypatch):
+def test_api_key_coexistence_warns_but_does_not_abort(monkeypatch, caplog):
+    """ANTHROPIC_API_KEY 与订阅覆盖共存时**不再一律中止**。
+
+    一律中止会让 anthropic 无法作为降级 provider：留着 key 启动被拦，
+    删掉 key 又会在撞额度真要降级时认证失败。改为「子进程剥离 + 父进程保留 + 告警」，
+    子进程隔离由 test_sdk_subprocess_env_blanks_anthropic_api_key 单独锁住。
+    """
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-would-bill-api")
     monkeypatch.setenv("CLAUDE_CODE_OAUTH_TOKEN", "test-oauth-token")
-    from tradingagents.graph.trading_graph import TradingAgentsGraph
-    from tradingagents.default_config import DEFAULT_CONFIG
+    from tradingagents.graph import trading_graph as tg
 
-    cfg = dict(DEFAULT_CONFIG)
+    cfg = dict(tg.DEFAULT_CONFIG) if hasattr(tg, "DEFAULT_CONFIG") else None
+    if cfg is None:
+        from tradingagents.default_config import DEFAULT_CONFIG
+        cfg = dict(DEFAULT_CONFIG)
     cfg["deep_think_provider_override"] = "claude_agent_sdk"
-    with pytest.raises(RuntimeError, match="ANTHROPIC_API_KEY"):
-        TradingAgentsGraph(config=cfg)
+
+    with caplog.at_level("WARNING"):
+        try:
+            tg.TradingAgentsGraph(config=cfg)
+        except Exception:
+            pass   # 后续构图可能因缺少其它依赖失败，本例只关心不是那条护栏拦的
+    assert any("ANTHROPIC_API_KEY" in r.message for r in caplog.records)
 
 
 def test_default_config_off_by_default():
@@ -472,3 +487,38 @@ def test_fallback_provider_and_model_must_be_configured_together(
     mismatched = (deep_on or quick_on) and bool(p) != bool(m)
 
     assert mismatched is should_raise
+
+
+def test_auth_detection_ignores_ordinary_assistant_text():
+    """工具分析师会复述桥接工具的失败原文——某个行情源自己的 key 失效时，
+    正文里可能出现 'invalid api key'。这不能被误判成订阅凭据失效。"""
+    from tradingagents.llm_clients.claude_agent_sdk_client import _looks_like_auth_failure
+
+    class _Block:
+        text = "调用行情工具失败：provider returned 'invalid api key' for the quote source."
+
+    class _NormalAssistant:          # 真实模型的正常回复
+        model = "claude-sonnet-4-6"
+        error = None
+        content = [_Block()]
+
+    class _SyntheticAuth:            # SDK 合成的认证错误
+        model = "<synthetic>"
+        error = "authentication_error"
+        content = [type("B", (), {"text": "401 OAuth access token has expired"})()]
+
+    assert _looks_like_auth_failure(_NormalAssistant()) is False
+    assert _looks_like_auth_failure(_SyntheticAuth()) is True
+
+
+def test_sdk_subprocess_env_blanks_anthropic_api_key(monkeypatch):
+    """ANTHROPIC_API_KEY 必须在子进程被置空（否则悄悄走 API 计费），
+    但父进程要保留它，好让 anthropic 仍能作为降级 provider。"""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
+    from tradingagents.llm_clients.claude_agent_sdk_client import ClaudeAgentSDKClient
+
+    client = ClaudeAgentSDKClient("opus", None)
+    opts = client._build_options(system_prompt=None)
+    env = getattr(opts, "env", None) or {}
+    assert env.get("ANTHROPIC_API_KEY") == ""
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-should-not-leak"

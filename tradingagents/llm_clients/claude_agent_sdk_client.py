@@ -86,14 +86,23 @@ def _looks_like_auth_failure(message: Any) -> bool:
     if isinstance(data, dict):
         if data.get("error_status") == 401 or data.get("error") == "authentication_failed":
             return True
+    # ⚠️ 只在**合成错误消息**上做文本匹配，绝不扫普通助手正文。
+    # 工具分析师会把桥接工具的失败原样复述出来——某个行情源自己的 key 失效时，
+    # Claude 的正文里就可能出现 "invalid api key"，按正文匹配会把它误判成
+    # 订阅凭据失效，进而中止整轮分析且不降级。
+    is_synthetic = getattr(message, "model", None) == "<synthetic>"
+    err = getattr(message, "error", None)
+    if not (is_synthetic or err):
+        return False
+
     blob = ""
     content = getattr(message, "content", None)
     if isinstance(content, list):
         blob = " ".join(
             getattr(b, "text", "") for b in content if getattr(b, "text", "")
         )
-    if getattr(message, "error", None):
-        blob += f" {message.error}"
+    if err:
+        blob += f" {err}"
     blob = blob.lower()
     return any(m in blob for m in _AUTH_MARKERS)
 
@@ -417,12 +426,20 @@ class ClaudeAgentSDKClient(BaseLLMClient):
             "setting_sources": [],    # don't load filesystem settings/skills/CLAUDE.md
             "permission_mode": "bypassPermissions",
         }
+        # ANTHROPIC_API_KEY 优先级高于订阅凭据，子进程看到它就会走按 token 计费的
+        # API——恰恰是启用订阅要避免的。这里在**子进程环境**里显式置空，
+        # 父进程仍保留该变量，这样 anthropic 才能继续作为撞额度后的降级 provider。
+        env: dict[str, str] = {}
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            env["ANTHROPIC_API_KEY"] = ""
         token = os.environ.get(OAUTH_ENV)
         if token:
             # Pin the explicit subscription token when provided; otherwise let the
             # SDK fall back to the ambient logged-in CLI session (Keychain) —
             # passing an empty token here is unnecessary and only muddies intent.
-            opts["env"] = {OAUTH_ENV: token}
+            env[OAUTH_ENV] = token
+        if env:
+            opts["env"] = env
         if sdk_tools:
             # Register the bridged analyst tools and let the SDK run the loop
             # internally over multiple turns (only these tools are allowed).

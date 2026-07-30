@@ -51,6 +51,19 @@ Breaking changes within the 0.x line are called out explicitly.
    **回退 v0.2.20 的 `openai_compatible` provider**——已改为只补 4 行路由，
    测试 `test_openai_compatible_is_routed_to_openai_client` 当场抓到了这个回退。
 
+### 审计中又修的三处
+
+- **`anthropic` 无法作为降级 provider（死结）**：原护栏检测到 `ANTHROPIC_API_KEY`
+  就一律中止——留着 key 启动被拦，删掉 key 又会在撞额度真要降级时认证失败。
+  改为在 **Agent SDK 子进程环境**里把该变量置空（`ClaudeAgentOptions.env`），
+  父进程保留供降级使用，启动只告警不中止。
+- **认证识别过宽（我引入的）**：原实现扫所有助手正文匹配 "invalid api key" 等词。
+  工具分析师会复述桥接工具的失败原文——某个行情源自己的 key 失效时正文里就可能
+  出现这些词，会被误判成订阅凭据失效并中止整轮分析。收窄为**只在合成错误消息**
+  （`model == "<synthetic>"` 或带 `error` 字段）上匹配。
+- **Web UI「所有节点」把深度模型复制给了 quick 节点**，覆盖掉 sonnet 默认值——
+  7 个分析师 + 辩手全跑 opus 会让订阅额度烧得极快，且与文档所述矛盾。
+
 ### 依赖
 
 `[agentsdk]` 链路为 `claude-agent-sdk → mcp → httpx2`，**不碰 httpx**，与 mootdx 的
@@ -59,7 +72,7 @@ Breaking changes within the 0.x line are called out explicitly.
 
 ### 测试
 
-`pytest tests/` **201 passed / 1 skipped / 45 subtests**。新增认证失败识别、
+`pytest tests/` **208 passed / 1 skipped / 45 subtests**。新增认证失败识别、
 `_AuthError` 不参与降级、报错可操作性三组断言。端到端实跑验证链路可达
 （本机 OAuth token 已过期，正确地报出可操作错误而非静默降级）。
 

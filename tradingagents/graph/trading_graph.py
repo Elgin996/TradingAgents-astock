@@ -176,11 +176,16 @@ class TradingAgentsGraph:
         # and would silently bill the pay-per-token API instead of the subscription.
         # Refuse to start rather than surprise-bill the user.
         if (deep_on or quick_on) and os.getenv("ANTHROPIC_API_KEY"):
-            raise RuntimeError(
-                "claude_agent_sdk override is on but ANTHROPIC_API_KEY is set — the "
-                "API key takes precedence and would silently bill the Anthropic API "
-                "instead of your Pro/Max subscription. Unset ANTHROPIC_API_KEY to use "
-                "the subscription, or clear the override."
+            # 该 key 优先级高于订阅凭据，泄进 Agent SDK 子进程就会悄悄走按 token
+            # 计费的 API。客户端已在子进程环境里把它显式置空，所以这里**不再一律
+            # 中止**——否则把 anthropic 用作降级 provider 就成了死结：留着 key 启动
+            # 被拦，删掉 key 又会在撞额度真要降级时认证失败。
+            logger.warning(
+                "ANTHROPIC_API_KEY is set while the claude_agent_sdk override is on. "
+                "It is stripped from the Agent SDK subprocess so subscription quota is "
+                "used, and kept in this process only so an `anthropic` fallback can "
+                "still authenticate. If you did not intend to keep a paid Anthropic "
+                "fallback, unset it."
             )
 
         # 降级配置必须成对给：只改 provider 不改 model，会把主 provider 的模型名
