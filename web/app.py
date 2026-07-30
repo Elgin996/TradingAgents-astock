@@ -182,13 +182,17 @@ def _build_config() -> dict:
     # Leaving the fallback keys None makes the graph fall back to the
     # sidebar-selected llm_provider + models on quota/failure.
     scope = st.session_state.get("subscription_scope", "off")
-    sub_model = st.session_state.get("agent_sdk_model") or "claude-opus-4-8"
+    # 侧栏那个输入框只配**深度节点**的模型。不要把它同时赋给 quick——
+    # quick 节点有 7 个分析师 + 多空/交易员/风险辩手，把深度节点的 opus 复制过去
+    # 会让订阅额度烧得极快，也与 README / 侧栏提示所说的「quick 默认 sonnet」矛盾。
+    # quick 的模型交给 DEFAULT_CONFIG（默认 sonnet），需要时在 config 层单独覆盖。
+    sub_model = st.session_state.get("agent_sdk_model")
     if scope in ("deep", "all"):
         config["deep_think_provider_override"] = "claude_agent_sdk"
-        config["agent_sdk_model"] = sub_model
+        if sub_model:
+            config["agent_sdk_model"] = sub_model
     if scope == "all":
         config["quick_think_provider_override"] = "claude_agent_sdk"
-        config["agent_sdk_quick_model"] = sub_model
     return config
 
 

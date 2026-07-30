@@ -421,3 +421,25 @@ def test_auth_failure_hint_is_actionable():
     hint = _auth_failure_hint(_M())
     assert "claude setup-token" in hint          # 给出可执行命令
     assert "CLAUDE_CODE_OAUTH_TOKEN" in hint
+
+
+def test_web_all_scope_keeps_separate_quick_model():
+    """选「所有节点」时不能把深度节点的模型复制给 quick——
+    7 个分析师 + 辩手全跑 opus 会让订阅额度烧得极快，也与文档所述矛盾。"""
+    from tradingagents.default_config import DEFAULT_CONFIG
+
+    config = dict(DEFAULT_CONFIG)
+    session = {"subscription_scope": "all", "agent_sdk_model": "opus"}
+
+    # 复刻 web/app.py:_build_config 的订阅分支
+    scope = session.get("subscription_scope", "off")
+    sub_model = session.get("agent_sdk_model")
+    if scope in ("deep", "all"):
+        config["deep_think_provider_override"] = "claude_agent_sdk"
+        if sub_model:
+            config["agent_sdk_model"] = sub_model
+    if scope == "all":
+        config["quick_think_provider_override"] = "claude_agent_sdk"
+
+    assert config["agent_sdk_model"] == "opus"
+    assert config["agent_sdk_quick_model"] == "sonnet"     # 未被 opus 覆盖
