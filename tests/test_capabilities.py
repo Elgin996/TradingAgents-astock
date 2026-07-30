@@ -84,3 +84,19 @@ def test_minimax_structured_output_keeps_schema_and_tool_choice():
         tool.get("function", {}).get("name") == "_Sample"
         for tool in kwargs.get("tools", [])
     )
+
+
+@pytest.mark.unit
+def test_deepseek_v3_family_keeps_permissive_defaults():
+    """V3.2 是 catalog 里在售型号，其 tool_choice 行为未实测过，
+    不能被 V4 的结论覆盖（原 `^deepseek-v\\d` 会误伤）。"""
+    for model in ("deepseek-v3", "deepseek-v3.2", "deepseek-chat"):
+        capabilities = get_capabilities(model)
+        assert capabilities.supports_tool_choice is True
+        assert capabilities.preferred_structured_method == "function_calling"
+
+
+@pytest.mark.unit
+def test_deepseek_v4_family_still_matched_by_pattern():
+    for model in ("deepseek-v4", "deepseek-v4.1", "deepseek-v4-turbo"):
+        assert get_capabilities(model).supports_tool_choice is False

@@ -80,7 +80,11 @@ _BY_ID: dict[str, ModelCapabilities] = {
 }
 
 _BY_PATTERN: list[tuple[re.Pattern[str], ModelCapabilities]] = [
-    (re.compile(r"^deepseek-v\d"), _DEEPSEEK_THINKING),
+    # 只匹配已实测的 V4 家族。`^deepseek-v\d` 会连 deepseek-v3* 和未来所有版本一起
+    # 吃掉，把「不接受 tool_choice」这个**只在 V4/reasoner 上验证过**的结论强加给
+    # 未验证的型号——结构化输出会从强制 schema 工具调用降级为可选调用，反而更容易
+    # 退回自由文本。与下方 MiniMax 同一把尺子：新家族实测过再加。
+    (re.compile(r"^deepseek-v4(?:$|[.-])"), _DEEPSEEK_THINKING),
     (re.compile(r"^deepseek-reasoner"), _DEEPSEEK_THINKING),
     # ``reasoning_split`` is an M2.x capability; do not assume it for a
     # future MiniMax family (for example M3) until that API is verified.
