@@ -152,13 +152,18 @@ pip install -e .
 # 如需使用 Google Gemini 模型（无 [google] extra，需显式装，见下方 FAQ）：
 pip install --no-deps "langchain-google-genai>=4.0.0"
 pip install "google-genai>=1.53.0" "httpx>=0.28.1"
+
+# 如需让节点走你个人 Claude Pro/Max 订阅额度而非 API 计费（可选）：
+pip install -e ".[agentsdk]"
 ```
 
 > **装完即可用，无需 Docker。** 安装后直接跑 `streamlit run web/app.py`（Web UI）或 `tradingagents`（CLI）即可，详见下方「Web UI」「CLI 方式」两节。Docker 仅是可选的部署方式，本地开发不需要。
 
 ### 2. 配置 LLM
 
-> **必须使用 API Key**，不能用 Claude/ChatGPT 订阅版。每次分析需 30-50 次 LLM 调用，只有 API 模式支持。
+> **默认走 API Key 计费**。每次分析需 30-50 次 LLM 调用。
+>
+> **例外（v0.4.0 新增）**：装 `[agentsdk]` 后可让部分或全部节点经 Claude Agent SDK 走你**个人 Claude Pro/Max 订阅额度**，不产生 API 账单。见下方「用个人 Claude 订阅额度」。
 
 在项目根目录创建 `.env` 文件，按你选择的供应商配置：
 
@@ -432,3 +437,48 @@ TradingAgents-Astock/
 本项目是 TauricResearch/TradingAgents 的 fork，继承 Apache 2.0 许可证。详见 [NOTICE](./NOTICE)。
 
 **作者：** Simon 林 · X [@linsizhen](https://x.com/linsizhen) · 邮箱：[simonlin0423@gmail.com](mailto:simonlin0423@gmail.com)
+### 用个人 Claude 订阅额度（可选，v0.4.0 新增）
+
+让节点经 Claude Agent SDK 走你**个人 Claude Pro/Max 订阅额度**，而不是按 token 计费的 Anthropic API。
+
+> 与内置 `anthropic` provider 的区别：`anthropic` 走 `ANTHROPIC_API_KEY` = **按 token 计费**；本 provider 走本机已登录的 `claude` CLI = **消耗订阅额度，不产生 API 账单**。
+>
+> 仅供**个人自用**——它消耗的是你自己账号的订阅额度。把它做成给别人用的产品需要 Anthropic 授权，不在本项目范围内。
+
+#### 1. 准备
+
+```bash
+pip install -e ".[agentsdk]"
+
+# 本机 claude 已登录即可；headless / CI 环境需要显式 token：
+claude setup-token          # 输出的 token 设为 CLAUDE_CODE_OAUTH_TOKEN
+
+# 不打算保留付费降级的话，顺手清掉（可选）
+unset ANTHROPIC_API_KEY
+```
+
+关于 `ANTHROPIC_API_KEY`：它的优先级高于订阅凭据，**但不会泄进 Agent SDK 子进程**——客户端在子进程环境里已把它显式置空，订阅额度照常生效。父进程保留它是为了让 `anthropic` 仍能作为撞额度后的降级 provider（否则就成死结：留着启动被拦、删掉又在真要降级时认证失败）。启动时只告警不中止。
+
+#### 2. 开启
+
+Web UI 侧栏「个人 Claude 订阅覆盖 (Agent SDK)」三档，或在 config 里设：
+
+```python
+config["deep_think_provider_override"]  = "claude_agent_sdk"   # 仅深度节点
+config["quick_think_provider_override"] = "claude_agent_sdk"   # 再加这条 = 全节点
+config["agent_sdk_model"]       = "opus"      # 深度节点
+config["agent_sdk_quick_model"] = "sonnet"    # 分析师节点
+```
+
+**模型建议填别名 `opus` / `sonnet`**——`claude` CLI 的别名恒指向最新模型，写死 `claude-opus-4-8` 这类完整 id 会随版本迭代过期。完整 id 同样支持。
+
+#### 3. 两条边界
+
+- **额度而非 token**：订阅是按额度限流的。「所有节点」会把 7 个分析师 + 多空/交易员/风险辩手全压上去，跑几轮就可能撞上限——所以 `agent_sdk_quick_model` 默认给的是更省的 `sonnet`。撞额度会自动降级到你配的付费 provider（可用 `agent_sdk_fallback_provider` / `agent_sdk_fallback_model` 指定）。
+- **凭据失效不降级**：OAuth token 过期时**直接报错中止**，不会静默降级到计费 provider——你开订阅模式就是为了避免账单，悄悄开始计费比报错更糟。报错里会给出 `claude setup-token` 的修复步骤。
+
+#### 依赖说明
+
+`[agentsdk]` 的依赖链是 `claude-agent-sdk → mcp → httpx2`，**不碰 httpx**，与 mootdx 的 `httpx<0.26` 无冲突（已 `uv lock` 实测）——和 #87 里被移除的 `[google]` 情况不同，不需要单开 venv。
+
+

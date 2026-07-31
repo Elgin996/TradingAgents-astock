@@ -163,18 +163,80 @@ class TradingAgentsGraph:
         if self.callbacks:
             llm_kwargs["callbacks"] = self.callbacks
 
-        deep_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["deep_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
-        quick_client = create_llm_client(
-            provider=self.config["llm_provider"],
-            model=self.config["quick_think_llm"],
-            base_url=self.config.get("backend_url"),
-            **llm_kwargs,
-        )
+        # Optional: route nodes through a personal Claude Pro/Max subscription
+        # via the Claude Agent SDK. `deep_think_provider_override` covers the
+        # deep nodes (Research / Portfolio Manager); `quick_think_provider_override`
+        # covers the quick nodes (7 tool-using analysts + Bull/Bear / trader /
+        # risk debaters). Both on ⇒ every node runs on the subscription. Off by
+        # default — behaviour is unchanged when both are None.
+        deep_on = self.config.get("deep_think_provider_override") == "claude_agent_sdk"
+        quick_on = self.config.get("quick_think_provider_override") == "claude_agent_sdk"
+
+        # F-004 guardrail: ANTHROPIC_API_KEY outranks the subscription OAuth token
+        # and would silently bill the pay-per-token API instead of the subscription.
+        # Refuse to start rather than surprise-bill the user.
+        if (deep_on or quick_on) and os.getenv("ANTHROPIC_API_KEY"):
+            # 该 key 优先级高于订阅凭据，泄进 Agent SDK 子进程就会悄悄走按 token
+            # 计费的 API。客户端已在子进程环境里把它显式置空，所以这里**不再一律
+            # 中止**——否则把 anthropic 用作降级 provider 就成了死结：留着 key 启动
+            # 被拦，删掉 key 又会在撞额度真要降级时认证失败。
+            logger.warning(
+                "ANTHROPIC_API_KEY is set while the claude_agent_sdk override is on. "
+                "It is stripped from the Agent SDK subprocess so subscription quota is "
+                "used, and kept in this process only so an `anthropic` fallback can "
+                "still authenticate. If you did not intend to keep a paid Anthropic "
+                "fallback, unset it."
+            )
+
+        # 降级配置必须成对给：只改 provider 不改 model，会把主 provider 的模型名
+        # 配到另一家去（如 AnthropicClient(model="deepseek-chat")），而这条路径
+        # **恰好在撞额度、最需要它工作的时候才被走到**——那时再炸就太晚了。
+        # 启动时就校验，而不是留到运行中。
+        _fb_provider = self.config.get("agent_sdk_fallback_provider")
+        _fb_model = self.config.get("agent_sdk_fallback_model")
+        if (deep_on or quick_on) and bool(_fb_provider) != bool(_fb_model):
+            missing = "agent_sdk_fallback_model" if _fb_provider else "agent_sdk_fallback_provider"
+            given = "agent_sdk_fallback_provider" if _fb_provider else "agent_sdk_fallback_model"
+            raise ValueError(
+                f"{given} is set but {missing} is not — the two must be configured "
+                f"together. Otherwise the fallback pairs one provider with another "
+                f"provider's model name and fails exactly when the subscription hits "
+                f"its quota. Set both, or leave both unset to fall back to "
+                f"llm_provider + its own model."
+            )
+
+        def _make_client(override_on, sdk_model_key, fallback_model_key):
+            """Build a subscription-backed client when overridden, else the normal
+            llm_provider client. Fallback rejoins the paid provider on quota/failure."""
+            if override_on:
+                # backend_url 是为 llm_provider 配的端点。显式指定了**另一家**
+                # provider 做降级时不能把它带过去（例如把 anthropic 降级请求发到
+                # MiniMax 网关），否则同样是撞额度那一刻才炸。None ⇒ 该 provider
+                # 用自己的默认端点。
+                cross_provider = bool(_fb_provider) and _fb_provider != self.config["llm_provider"]
+                fallback_spec = {
+                    "provider": _fb_provider or self.config["llm_provider"],
+                    "model": _fb_model or self.config[fallback_model_key],
+                    "base_url": None if cross_provider else self.config.get("backend_url"),
+                    # 带上 callbacks：降级意味着**开始计费**，此时统计/成本回调
+                    # 反而看不到这些调用的话，恰好在花钱的时候统计是瞎的。
+                    **({"callbacks": self.callbacks} if self.callbacks else {}),
+                }
+                return create_llm_client(
+                    provider="claude_agent_sdk",
+                    model=self.config[sdk_model_key],
+                    base_url=self.config.get("backend_url"),
+                    fallback_spec=fallback_spec,
+                )
+            return create_llm_client(
+                provider=self.config["llm_provider"],
+                model=self.config[fallback_model_key],
+                base_url=self.config.get("backend_url"),
+                **llm_kwargs,
+            )
+
+        deep_client = _make_client(deep_on, "agent_sdk_model", "deep_think_llm")
+        quick_client = _make_client(quick_on, "agent_sdk_quick_model", "quick_think_llm")
 
         self.deep_thinking_llm = deep_client.get_llm()
         self.quick_thinking_llm = quick_client.get_llm()
