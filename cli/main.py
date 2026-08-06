@@ -1280,5 +1280,28 @@ def analyze(
     run_analysis(checkpoint=checkpoint)
 
 
+@app.command()
+def performance(
+    json_out: bool = typer.Option(
+        False, "--json", help="Print raw JSON instead of the formatted report."
+    ),
+):
+    """决策绩效统计：这套流程过往的判断准不准（零 LLM 调用，只读已结算的记录）。
+
+    数据来自记忆日志：每次分析会落一条决策，下次分析同一只股票时自动拉真实行情
+    回填收益与 alpha。**这不是回测**，详见报告末尾的说明。
+    """
+    import json as _json
+
+    from tradingagents.agents.utils.memory import TradingMemoryLog
+    from tradingagents.performance import format_report, summarize
+
+    summary = summarize(TradingMemoryLog(DEFAULT_CONFIG).load_entries())
+    if json_out:
+        console.print_json(_json.dumps(summary, ensure_ascii=False))
+        return
+    console.print(Markdown(format_report(summary)))
+
+
 if __name__ == "__main__":
     app()

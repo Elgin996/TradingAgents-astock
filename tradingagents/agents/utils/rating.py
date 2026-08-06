@@ -46,10 +46,21 @@ _CN_RATING_MAP = {
 # same position (regex alternation is leftmost, first-listed among equals).
 _CN_ALT = "|".join(sorted(_CN_RATING_MAP, key=len, reverse=True))
 
-# A labelled Chinese rating, e.g. "最终评级：卖出" / "投资建议: **增持**".
-_CN_LABEL_RE = re.compile(
+_CN_LABEL_PREFIX = (
     r"(?:最终评级|评级|投资评级|评级结论|最终投资建议|投资建议|操作建议|"
-    r"推荐评级|建议|推荐)\s*[:：\-]\s*\*{0,2}\s*(" + _CN_ALT + r")"
+    r"推荐评级|建议|推荐)\s*[:：\-]\s*\*{0,2}\s*"
+)
+
+# A labelled Chinese rating, e.g. "最终评级：卖出" / "投资建议: **增持**".
+_CN_LABEL_RE = re.compile(_CN_LABEL_PREFIX + r"(" + _CN_ALT + r")")
+
+# 中文标签后面跟**英文**评级词，例如 "最终评级：Buy"。output_language 设为中文、
+# 但模型保留了英文评级词时就是这个形状——而它躲过了上面每一条规则：
+# 英文标签规则要求出现 "rating"；中文标签规则只认中文评级词；裸英文词扫描按
+# 空白切分，"最终评级：Buy" 是**一个** token，`strip("*:.,")` 又剥不掉全角冒号。
+# 结果是静默落到默认值 Hold —— 决策评级被悄悄改写，报告里完全看不出来。
+_CN_LABEL_EN_RE = re.compile(
+    _CN_LABEL_PREFIX + r"(" + "|".join(RATINGS_5_TIER) + r")", re.IGNORECASE
 )
 # Bare Chinese rating term anywhere (last-resort fallback).
 _CN_TERM_RE = re.compile(_CN_ALT)
@@ -60,7 +71,8 @@ def parse_rating(text: str, default: str = "Hold") -> str:
 
     Pass order (first hit wins; explicit labels always beat bare words):
     1. English ``Rating: X`` label (tolerant of markdown bold).
-    2. Chinese rating label, e.g. ``最终评级：卖出`` / ``投资建议: 增持``.
+    2. Chinese rating label, e.g. ``最终评级：卖出`` / ``投资建议: 增持``；
+       也接受中文标签后跟英文评级词的混排（``最终评级：Buy``）。
     3. First bare English 5-tier word found anywhere.
     4. First bare Chinese rating term found anywhere (longest match wins).
 
@@ -76,6 +88,11 @@ def parse_rating(text: str, default: str = "Hold") -> str:
     m = _CN_LABEL_RE.search(text)
     if m:
         return _CN_RATING_MAP[m.group(1)]
+
+    # 2b. Chinese label + English rating word (最终评级：Buy)
+    m = _CN_LABEL_EN_RE.search(text)
+    if m:
+        return m.group(1).capitalize()
 
     # 3. Bare English rating word
     for line in text.splitlines():

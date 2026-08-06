@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.2] — 2026-08-06
+
+新增决策绩效统计，并修掉一个会污染它的评级解析漏洞。
+
+### 新增：`tradingagents performance`（[#61](https://github.com/simonlin1212/TradingAgents-astock/issues/61)）
+
+决策和真实收益其实一直都在存——`TradingMemoryLog` 每次分析落一条决策，下次分析
+同一只股票时自动拉真实行情回填收益与 alpha。缺的只是汇总：在此之前整个仓库连一个
+胜率都算不出来。
+
+- **零 LLM 调用**，只读已落盘的结果。
+- 整体胜率 / **alpha 胜率**（对沪深 300）/ 平均与中位收益 / 最好最差。
+- 按评级、按标的分组。
+- **评级区分度检验**：五档评级从 Buy 到 Sell，平均 alpha 是否单调递减。不单调就说明
+  评级没有实际区分能力——这比单看胜率有意义得多。仅在五档都有样本时才给结论。
+- `--json` 输出便于二次加工。
+
+三条刻意的"不许骗人"设计：
+
+1. **收益解析不出来的记录跳过，不当成 0%** —— 后者会把统计悄悄拉向中性。
+2. **样本少于 20 条时报告自己标注「这些比率基本是噪音」**，不等用户去数。
+3. **报告结尾写明这不是回测、不是策略业绩**：持有窗口重叠、无仓位管理、未计交易
+   成本，样本可能有选择偏差。
+
+指标口径参考 [Vibe-Trading](https://github.com/HKUDS/Vibe-Trading)（MIT）的
+`agent/backtest/metrics.py`：胜率与盈亏按已完成交易计。**刻意不算夏普、不做年化**
+——用离散且重叠的决策点去年化只会得到一个看着专业但没有意义的数字。
+
+### 修复：中文标签 + 英文评级词被静默判成 Hold
+
+`最终评级：Buy` 这种混排（`output_language` 为中文、模型却保留英文评级词）躲过了
+原有的每一条规则：英文标签规则要求出现 `rating`；中文标签规则只认中文评级词；裸
+英文词扫描按空白切分，`最终评级：Buy` 是**一个** token，`strip("*:.,")` 又剥不掉
+全角冒号。结果静默落到默认值 Hold —— 决策评级被悄悄改写，报告里完全看不出来，
+属于 #78 / #80 同类问题的未修变种。
+
+这个漏洞会直接污染上面的绩效统计（评级分组全错），是在用真实数据验证报告时撞出来的。
+
+### 测试
+
+新增 `tests/test_performance.py`（16 例）与 4 例评级解析用例（含"中文评级词仍然
+优先"的反向边界）。全量回归 277 passed。
+
+---
+
 ## [0.5.1] — 2026-08-06
 
 修复未来函数：在历史日期上跑分析时，数据层会把"今天"的数据当成分析日当天的事实。

@@ -92,6 +92,27 @@ class TestParseRatingChinese:
         for cn, en in cases.items():
             assert parse_rating(f"最终评级：{cn}\n理由若干。") == en
 
+    def test_cn_label_with_english_rating_word(self):
+        """中文标签 + 英文评级词（最终评级：Buy）。
+
+        output_language 设为中文、模型却保留英文评级词时就是这个形状，而它躲过了
+        原来每一条规则：英文标签规则要求出现 "rating"；中文标签规则只认中文评级
+        词；裸英文词扫描按空白切分，"最终评级：Buy" 是一个 token，strip 又剥不掉
+        全角冒号 —— 结果静默落到默认 Hold，决策评级被悄悄改写。
+        """
+        assert parse_rating("最终评级：Buy") == "Buy"
+        assert parse_rating("最终评级：Sell\n理由若干。") == "Sell"
+        assert parse_rating("投资建议：Overweight") == "Overweight"
+        assert parse_rating("评级 - buy") == "Buy"
+
+    def test_cn_label_with_english_word_all_tiers(self):
+        for r in RATINGS_5_TIER:
+            assert parse_rating(f"最终评级：{r}") == r
+
+    def test_cn_label_still_prefers_chinese_term(self):
+        """中文评级词仍然优先——新增的混排规则不能抢在它前面。"""
+        assert parse_rating("最终评级：卖出（英文可写作 Buy）") == "Sell"
+
     def test_cn_label_variants(self):
         assert parse_rating("投资建议: **增持**\n分批建仓。") == "Overweight"
         assert parse_rating("评级：清仓") == "Sell"
