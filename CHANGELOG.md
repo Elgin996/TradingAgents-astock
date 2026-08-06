@@ -6,6 +6,65 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.0] — 2026-08-06
+
+两项功能：分角色模型（可选），以及让情绪分析师看得到硬数据。
+
+### 新增：分角色模型 `role_llms`（可选，默认关闭 · [#39](https://github.com/simonlin1212/TradingAgents-astock/issues/39)）
+
+同一个模型分饰多空两角时倾向于自我附和，辩论就失去意义。现在可以给单个角色指定
+另一家模型：
+
+```python
+"role_llms": {
+    "bull": {"provider": "qwen", "model": "qwen-plus"},
+    "bear": {"provider": "glm",  "model": "glm-4.6"},
+}
+```
+
+- **默认空表 = 行为完全不变**。只有一家模型的用户不需要碰这一项。
+- 16 个可配角色（7 分析师 + 多空 + 两个 Manager + 交易员 + 风险三方 + 质量门）。
+- 角色名写错**当场报错**，不静默忽略——否则会以为配置生效了。
+- 相同 provider + model **复用同一个实例**，写满 16 个角色也不会开 16 条连接。
+- 换 provider 时不会把主 provider 的 `backend_url` 带过去（会把请求发到别家网关）。
+- 与 `claude_agent_sdk` 订阅覆盖并用时，被单独配置的角色会绕开订阅按 token 计费，
+  启动时**点名警告**是哪几个，不让人以为全程走订阅却在悄悄花钱。
+
+### 改进：情绪分析师改为数据驱动（[#61](https://github.com/simonlin1212/TradingAgents-astock/issues/61)）
+
+此前情绪分析师只有 `get_news` 一个工具，只能从新闻语气推断情绪——而"新闻听起来
+利好"和"资金正在流出"完全可以同时发生。现在补上三样可核对的硬数据：
+
+- `get_fund_flow` — 主力/超大单资金净流入（当日分钟级 + 近 20 日），情绪最硬的证据
+- `get_stock_data` — 量价，用于判断情绪强度
+- `get_hot_stocks` — 当日强势股与题材归因，用于判断热度与归因
+
+提示词同步改为「先看资金、再看新闻」，并**强制报告出「资金面与消息面是否背离」**
+——消息面正面而主力持续净流出（或相反）是这次改造最有价值的产出。必采清单从 5 项
+扩到 9 项，取不到的数据要求如实标注，不许用新闻语气补一个编造的数字。
+
+### 修复：mootdx 全表不可用时首次调用要卡几分钟（承接 [#90](https://github.com/simonlin1212/TradingAgents-astock/issues/90)）
+
+v0.4.1 的修复引入了一个自己的问题：全部服务器都不可用时，会去跑 `bestip` 全表测速，
+实测首次调用 **>170 秒**才报错。
+
+- **协议层失败要正确计数**：这批服务器是在 `Quotes.factory` 建连握手时就抛错的，
+  根本走不到"取数验证"那一步。只统计后者会让计数恒为 0，快速失败判断随之失效。
+- **协议被拒时跳过 bestip**：bestip 用的是同一套协议、同一批主机，不可能有别的结果。
+  只有内置表整体 TCP 都连不上（IP 老化，bestip 的本来用途）才跑它。
+- **连续 3 台协议失败就停手**：连续失败指向协议层被拦（代理/防火墙），换服务器无解。
+- 实测 **>170s → 18.7s**，第二次调用命中负缓存 0ms。报错文案也据实区分
+  「端口连不上」与「协议被拒」，两者排查方向完全不同。
+
+### 测试
+
+新增 `tests/test_role_llms.py`（16 例）与 `tests/test_sentiment_data_tools.py`（5 例），
+`tests/test_mootdx_server_selection.py` 补 3 例覆盖握手期失败这条真实路径。
+其中两类断言值得单独说：**默认不配 role_llms 时每个角色仍走原来的 quick/deep**，
+以及**分析师绑定的工具与图里 ToolNode 注册的工具必须一致**（不一致只会在真跑分析时炸）。
+
+---
+
 ## [0.4.1] — 2026-08-06
 
 三个 issue 的静默失败修复：报告被悄悄截断、mootdx 反复降级、Kimi 报看不懂的 401。

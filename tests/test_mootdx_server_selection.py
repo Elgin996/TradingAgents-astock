@@ -149,3 +149,79 @@ def test_get_client_failure_does_not_clear_negative_cache(fake_tdx):
     with pytest.raises(RuntimeError):
         a_stock._mootdx_call("bars", symbol="600519")
     assert len(fake_tdx["probe_calls"]) == probes
+
+
+# ---------------------------------------------------------------------------
+# 协议层失败的真实形态：握手在 Quotes.factory 内部就炸，根本走不到取数验证。
+# 只统计"取数失败"会让计数恒为 0，快速失败判断随之失效（实测踩过）。
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def handshake_fails(monkeypatch):
+    """服务器 TCP 通，但 Quotes.factory 建连时握手被 RST —— 线上就是这个形态。"""
+    import mootdx.quotes
+
+    servers = [(f"10.0.0.{i}", 7709) for i in range(1, 9)]
+    state = {"factory_calls": [], "bestip_used": False}
+
+    monkeypatch.setattr(a_stock, "_TDX_SERVERS", servers)
+    monkeypatch.setattr(a_stock, "_mootdx_client", None)
+    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", 0.0)
+    monkeypatch.setattr(a_stock, "_probe_tdx", lambda ip, port, timeout=2.0: True)
+
+    class FakeQuotes:
+        @staticmethod
+        def factory(market="std", server=None, **kwargs):
+            if kwargs.get("bestip"):
+                state["bestip_used"] = True
+                raise ConnectionResetError("bestip 也连不上")
+            state["factory_calls"].append(server[0] if server else "bare")
+            raise ConnectionResetError("[Errno 54] Connection reset by peer")
+
+    monkeypatch.setattr(mootdx.quotes, "Quotes", FakeQuotes)
+    return state
+
+
+def test_handshake_failure_counts_as_protocol_failure(handshake_fails):
+    """握手期就炸的服务器要被算进协议失败，从而触发提前收手。"""
+    with pytest.raises(RuntimeError, match="协议握手/取数被拒"):
+        a_stock._get_mootdx_client()
+
+    tried = [c for c in handshake_fails["factory_calls"] if c != "bare"]
+    assert len(tried) == a_stock._MAX_PROTOCOL_FAILURES, (
+        f"连续协议失败后应停手，实际试了 {len(tried)} 台"
+    )
+
+
+def test_bestip_skipped_when_protocol_is_the_problem(handshake_fails):
+    """bestip 会把内置主机表整个测速一遍（实测几分钟）。协议层被拦时它用的是
+    同一套协议、同一批主机，不可能有别的结果，跑它只是让用户干等。"""
+    with pytest.raises(RuntimeError):
+        a_stock._get_mootdx_client()
+
+    assert handshake_fails["bestip_used"] is False
+
+
+def test_bestip_still_used_when_nothing_is_reachable(monkeypatch):
+    """反过来：内置表整体 TCP 都不通（IP 老化）时，bestip 仍要跑——那正是它的用途。"""
+    import mootdx.quotes
+
+    monkeypatch.setattr(a_stock, "_TDX_SERVERS", [("10.0.0.1", 7709)])
+    monkeypatch.setattr(a_stock, "_mootdx_client", None)
+    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", 0.0)
+    monkeypatch.setattr(a_stock, "_probe_tdx", lambda ip, port, timeout=2.0: False)
+    used = {"bestip": False}
+
+    class FakeQuotes:
+        @staticmethod
+        def factory(market="std", server=None, **kwargs):
+            if kwargs.get("bestip"):
+                used["bestip"] = True
+            raise ConnectionResetError("nope")
+
+    monkeypatch.setattr(mootdx.quotes, "Quotes", FakeQuotes)
+    with pytest.raises(RuntimeError, match="没有一台"):
+        a_stock._get_mootdx_client()
+
+    assert used["bestip"] is True

@@ -31,6 +31,17 @@ DEFAULT_CONFIG = {
         if os.environ.get("TRADINGAGENTS_MAX_TOKENS")
         else None
     ),
+    # 可选：给单个角色单独指定模型（#39）。留空 = 全部角色沿用上面的
+    # quick/deep 两档，行为与以前完全一致——大多数人只有一家模型，不需要碰这里。
+    #
+    # 用途：让多空辩手用**不同厂商**的模型。同一个模型分饰多角时倾向于互相附和，
+    # 换成不同底座才会真的出现反驳。例：
+    #   "role_llms": {
+    #       "bull": {"provider": "deepseek", "model": "deepseek-chat"},
+    #       "bear": {"provider": "qwen",     "model": "qwen-plus"},
+    #   }
+    # provider 省略则沿用 llm_provider；合法角色名见 graph/setup.py 的 ROLE_KEYS。
+    "role_llms": {},
     # Provider-specific thinking configuration
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"

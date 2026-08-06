@@ -49,7 +49,7 @@ from tradingagents.agents.utils.agent_utils import (
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
-from .setup import GraphSetup
+from .setup import ROLE_KEYS, GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
@@ -240,7 +240,10 @@ class TradingAgentsGraph:
 
         self.deep_thinking_llm = deep_client.get_llm()
         self.quick_thinking_llm = quick_client.get_llm()
-        
+
+        # 可选：给单个角色指定模型（#39）。不配 = 完全维持 quick/deep 两档的原行为。
+        self.role_llms = self._build_role_llms(llm_kwargs, deep_on or quick_on)
+
         self.memory_log = TradingMemoryLog(self.config)
 
         # Create tool nodes
@@ -256,6 +259,7 @@ class TradingAgentsGraph:
             self.deep_thinking_llm,
             self.tool_nodes,
             self.conditional_logic,
+            resolve_llm=self.role_llms.get,
         )
 
         self.propagator = Propagator()
@@ -271,6 +275,73 @@ class TradingAgentsGraph:
         self.workflow = self.graph_setup.setup_graph(selected_analysts)
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
+
+    def _build_role_llms(
+        self, llm_kwargs: Dict[str, Any], subscription_on: bool
+    ) -> Dict[str, Any]:
+        """按 `config["role_llms"]` 给单个角色单独建 LLM（#39）。
+
+        默认是空表 —— 不配任何角色时行为与以前完全一致（全部走 quick/deep 两档）。
+        配了才有意义：让多空辩手用不同厂商的模型，避免同源模型互相不反驳。
+
+        相同 (provider, model, endpoint) 的角色复用同一个实例，不会因为写了 7 个
+        角色就建 7 条连接。
+        """
+        specs = self.config.get("role_llms") or {}
+        if not specs:
+            return {}
+
+        unknown = sorted(set(specs) - set(ROLE_KEYS))
+        if unknown:
+            raise ValueError(
+                f"role_llms 里有无法识别的角色名：{unknown}。"
+                f"合法角色：{', '.join(ROLE_KEYS)}。"
+                f"（写错的角色名如果被静默忽略，你会以为配置生效了，实际没有。）"
+            )
+
+        if subscription_on:
+            # 订阅覆盖是为了不产生 API 账单，这里显式点名哪些角色会绕开它去计费，
+            # 不能让人以为"全部走订阅"却在某几个角色上悄悄花钱。
+            logger.warning(
+                "role_llms 为以下角色单独指定了模型，它们会绕开 claude_agent_sdk "
+                "订阅覆盖、按 token 计费：%s", ", ".join(sorted(specs)),
+            )
+
+        main_provider = self.config["llm_provider"]
+        cache: Dict[tuple, Any] = {}
+        resolved: Dict[str, Any] = {}
+        for role, spec in specs.items():
+            if not isinstance(spec, dict) or not spec.get("model"):
+                raise ValueError(
+                    f"role_llms['{role}'] 必须是带 model 的字典，"
+                    f'例如 {{"provider": "deepseek", "model": "deepseek-chat"}}。'
+                )
+            provider = spec.get("provider") or main_provider
+            # backend_url 是给主 provider 配的端点。换了厂商还把它带过去，请求就会
+            # 发到另一家的网关（和 agent_sdk 降级那里同一个坑）。None = 用该
+            # provider 自己的默认端点。
+            if "backend_url" in spec:
+                base_url = spec["backend_url"]
+            elif provider.lower() == str(main_provider).lower():
+                base_url = self.config.get("backend_url")
+            else:
+                base_url = None
+
+            key = (provider.lower(), spec["model"], base_url)
+            if key not in cache:
+                cache[key] = create_llm_client(
+                    provider=provider,
+                    model=spec["model"],
+                    base_url=base_url,
+                    **llm_kwargs,
+                ).get_llm()
+            resolved[role] = cache[key]
+
+        logger.info(
+            "role_llms: %d 个角色单独配置，实际建了 %d 个模型实例",
+            len(resolved), len(cache),
+        )
+        return resolved
 
     def _get_provider_kwargs(self) -> Dict[str, Any]:
         """Get provider-specific kwargs for LLM client creation."""
@@ -312,8 +383,12 @@ class TradingAgentsGraph:
             ),
             "social": ToolNode(
                 [
-                    # News tools for social media analysis
+                    # 情绪分析不只读新闻：资金流是最硬的情绪证据，量价给强度，
+                    # 强势股榜给热度归因，新闻负责解释成因（#61）。
                     get_news,
+                    get_fund_flow,
+                    get_hot_stocks,
+                    get_stock_data,
                 ]
             ),
             "news": ToolNode(

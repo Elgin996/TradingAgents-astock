@@ -292,6 +292,7 @@ streamlit run web/app.py
 | `deep_think_llm` | `"MiniMax-M2.7"` | Research Manager + Portfolio Manager 用的模型 |
 | `quick_think_llm` | `"MiniMax-M2.7-highspeed"` | 所有 Analyst / Researcher / Trader 用的模型 |
 | `backend_url` | `None` | 自定义 API 端点 / 第三方中转网关。可在 Web UI 侧边栏填写，或用 `.env` 的 `BACKEND_URL`；方便国内通过代理访问 Claude / OpenAI |
+| `role_llms` | `{}` | **可选**：给单个角色指定另一家模型（如多空辩手用不同厂商），留空 = 全部沿用 quick/deep 两档，行为不变。见下方「分角色模型」 #39 |
 | `max_tokens` | `None` | 单次回复的最大输出 token 数。`None` = 用 provider 默认值。**报告写到一半就断，先调这里**（不是上下文超长）；也可用环境变量 `TRADINGAGENTS_MAX_TOKENS`。#91 |
 | `output_language` | `"Chinese"` | 报告输出语言（内部辩论始终英文） |
 | `market_lookback_days` | `None` | 技术分析回溯天数（分析区间 = 起始日期 → 分析日期）。Web/CLI 由「数据起始日期」自动算出；`None` = 模型自选（约 30 天）。#16 |
@@ -300,6 +301,45 @@ streamlit run web/app.py
 | `data_vendors` | 全部 `"a_stock"` | 数据供应商路由 |
 | `checkpoint_enabled` | `False` | 启用 SQLite 断点续跑 |
 | `memory_log_max_entries` | `None` | 交易记忆最大条目数 |
+
+---
+
+### 分角色模型（可选，v0.5.0 新增）
+
+默认所有角色共用 `quick_think_llm` / `deep_think_llm` 两档——**大多数人只有一家模型，不需要碰这一项**。
+
+如果你手上有多家模型，可以给单个角色单独指定。最典型的用法是**让多空辩手用不同厂商的模型**：同一个模型分饰多角时倾向于互相附和，换成不同底座才会真的出现反驳。
+
+```python
+config = {
+    "llm_provider": "deepseek",          # 未单独配置的角色仍走这里
+    "deep_think_llm": "deepseek-chat",
+    "quick_think_llm": "deepseek-chat",
+    "role_llms": {
+        "bull": {"provider": "qwen",    "model": "qwen-plus"},
+        "bear": {"provider": "glm",     "model": "glm-4.6"},
+        # provider 省略则沿用 llm_provider，只换模型：
+        "portfolio_manager": {"model": "deepseek-reasoner"},
+    },
+}
+```
+
+合法角色名（其余角色自动沿用两档默认）：
+
+| 分组 | 角色名 |
+|------|--------|
+| 7 个分析师 | `market` `social` `news` `fundamentals` `policy` `hot_money` `lockup` |
+| 辩论与决策 | `bull` `bear` `research_manager` `trader` |
+| 风险三方 | `risk_aggressive` `risk_neutral` `risk_conservative` |
+| 其他 | `quality_gate` `portfolio_manager` |
+
+几点说明：
+
+- **角色名写错会直接报错**，不会静默忽略——否则你会以为配置生效了，实际没有。
+- **相同的 provider + model 只建一个实例**，写 7 个角色不会开 7 条连接。
+- 每家 provider 用**自己的** API Key 环境变量（`DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` / `ZHIPU_API_KEY` …），缺哪个会指名报出来。
+- 换了 provider 时**不会**把 `backend_url` 带过去（那是给主 provider 配的端点），需要的话在该角色里单独写 `backend_url`。
+- 同时开着 `claude_agent_sdk` 订阅覆盖时，`role_llms` 里配的角色会**绕开订阅按 token 计费**，启动时会点名警告是哪几个。
 
 ---
 

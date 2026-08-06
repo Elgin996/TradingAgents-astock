@@ -277,6 +277,7 @@ All configuration is passed in through the `config` dictionary. Complete options
 | `deep_think_llm` | `"MiniMax-M2.7"` | Model used by the Research Manager + Portfolio Manager |
 | `quick_think_llm` | `"MiniMax-M2.7-highspeed"` | Model used by all Analysts / Researchers / Traders |
 | `backend_url` | `None` | Custom API endpoint / third-party relay gateway. Can be filled in via the Web UI sidebar or the `.env` file's `BACKEND_URL`; useful for accessing Claude / OpenAI from within China via a proxy |
+| `role_llms` | `{}` | **Optional**: give individual roles a different model (e.g. bull vs bear from different vendors). Empty = every role uses the quick/deep pair as before. See "Per-role models" below. #39 |
 | `max_tokens` | `None` | Max output tokens per reply. `None` = the provider's own default. **If a report stops mid-sentence, raise this first** (it is the output cap, not the context window); also settable via `TRADINGAGENTS_MAX_TOKENS`. #91 |
 | `output_language` | `"Chinese"` | Language for report output (internal debates are always in English) |
 | `market_lookback_days` | `None` | Lookback period in days for technical analysis (analysis range = start date → analysis date). Automatically calculated from the "data start date" in Web/CLI; `None` = model chooses (~30 days). #16 |
@@ -285,6 +286,46 @@ All configuration is passed in through the `config` dictionary. Complete options
 | `data_vendors` | All `"a_stock"` | Data vendor routing |
 | `checkpoint_enabled` | `False` | Enable SQLite checkpoint/resume |
 | `memory_log_max_entries` | `None` | Maximum number of entries in trading memory |
+
+### Per-role models (optional, added in v0.5.0)
+
+By default every role shares the `quick_think_llm` / `deep_think_llm` pair — **most people run a single vendor and never need this**.
+
+If you do have several models available, you can assign one to a specific role. The motivating case is **giving the bull and bear researchers models from different vendors**: one model playing both sides tends to agree with itself, and real rebuttals only show up once the underlying models differ.
+
+```python
+config = {
+    "llm_provider": "deepseek",          # roles you do not list still use this
+    "deep_think_llm": "deepseek-chat",
+    "quick_think_llm": "deepseek-chat",
+    "role_llms": {
+        "bull": {"provider": "qwen", "model": "qwen-plus"},
+        "bear": {"provider": "glm",  "model": "glm-4.6"},
+        # omit provider to keep llm_provider and only swap the model:
+        "portfolio_manager": {"model": "deepseek-reasoner"},
+    },
+}
+```
+
+Valid role names (anything you omit keeps the quick/deep default):
+
+| Group | Roles |
+|-------|-------|
+| 7 analysts | `market` `social` `news` `fundamentals` `policy` `hot_money` `lockup` |
+| Debate & decision | `bull` `bear` `research_manager` `trader` |
+| Risk trio | `risk_aggressive` `risk_neutral` `risk_conservative` |
+| Other | `quality_gate` `portfolio_manager` |
+
+Notes:
+
+- **A misspelled role name raises immediately** rather than being ignored — otherwise you would believe the config took effect when it did not.
+- **Identical provider + model share one instance**, so listing seven roles does not open seven connections.
+- Each provider uses **its own** API key variable (`DEEPSEEK_API_KEY` / `DASHSCOPE_API_KEY` / `ZHIPU_API_KEY` …); a missing one is reported by name.
+- `backend_url` is **not** carried across vendors (it belongs to the main provider); set `backend_url` inside the role entry if you need one.
+- With the `claude_agent_sdk` subscription override on, roles listed in `role_llms` **bypass the subscription and bill per token**; the affected roles are named in a startup warning.
+
+---
+
 ## Common Troubleshooting
 
 **Q: Using DeepSeek/Tongyi/Zhipu but getting `OpenAIError: The api_key client option must be set ... OPENAI_API_KEY`?**

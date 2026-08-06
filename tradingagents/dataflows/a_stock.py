@@ -183,6 +183,10 @@ _TDX_CANARY_SYMBOL = "600519"
 _MOOTDX_RETRY_AFTER_S = 300.0
 _mootdx_unavailable_until = 0.0
 
+# 连续这么多台「端口开着但通达信协议被拒」就不再往下试。这种连续失败指向的是
+# 协议层被拦（代理 / 防火墙 / 网络策略），换服务器解决不了，逐台试满只是干等。
+_MAX_PROTOCOL_FAILURES = 3
+
 
 def _probe_tdx(ip: str, port: int, timeout: float = 2.0) -> bool:
     """TCP 握手探测通达信服务器端口是否开着。
@@ -246,20 +250,35 @@ def _get_mootdx_client():
     for ip, port in _TDX_SERVERS:
         if not _probe_tdx(ip, port):
             continue
+        # 「TCP 通但通达信协议不通」有两种表现：factory 建连时握手就被拒，
+        # 或者建出来了但取不到数。**两种都要算**——只统计后者的话，计数永远是 0
+        # （实测这批服务器全是在 factory 里抛 ConnectionReset），下面的快速失败
+        # 判断就失效了。
         try:
             candidate = Quotes.factory(market="std", server=(ip, port))
         except Exception as e:
-            logger.debug("mootdx factory failed for %s:%s — %s", ip, port, e)
-            continue
-        if _tdx_client_works(candidate):
-            logger.info("mootdx server selected: %s:%s", ip, port)
-            _mootdx_client = candidate
-            return _mootdx_client
-        tcp_ok_but_dead += 1
-        logger.debug("mootdx %s:%s TCP 可连但取数失败，换下一台", ip, port)
+            tcp_ok_but_dead += 1
+            logger.debug("mootdx %s:%s 握手失败（%s），换下一台", ip, port, type(e).__name__)
+        else:
+            if _tdx_client_works(candidate):
+                logger.info("mootdx server selected: %s:%s", ip, port)
+                _mootdx_client = candidate
+                return _mootdx_client
+            tcp_ok_but_dead += 1
+            logger.debug("mootdx %s:%s 建连成功但取不到数，换下一台", ip, port)
 
-    # fallback：bestip 测速 / 裸 factory（老用户 config 已有 IP）。同样要验证。
-    for kwargs in ({"bestip": True}, {}):
+        # 连续多台都是「端口开着、协议被拒」，说明是协议层被拦（代理/防火墙），
+        # 不是某几台服务器坏了——再往下试也是同样结果，只会让用户干等。
+        if tcp_ok_but_dead >= _MAX_PROTOCOL_FAILURES:
+            logger.debug("mootdx 连续 %d 台协议层失败，停止逐台重试", tcp_ok_but_dead)
+            break
+
+    # fallback。bestip 会把 mootdx 内置主机表整个测速一遍，实测要几分钟，所以
+    # **只在内置表整体连不上时才值得跑**——那才是它要解决的问题（IP 老化）。
+    # 如果 TCP 明明连得上、只是通达信协议被拒，bestip 用的是同一套协议、同一批
+    # 主机，不可能有别的结果，跑它纯粹是让用户白等几分钟（#90）。
+    fallbacks = [{}] if tcp_ok_but_dead else [{"bestip": True}, {}]
+    for kwargs in fallbacks:
         try:
             candidate = Quotes.factory(market="std", **kwargs)
         except Exception as e:
@@ -271,11 +290,19 @@ def _get_mootdx_client():
             return _mootdx_client
 
     _mootdx_unavailable_until = time.time() + _MOOTDX_RETRY_AFTER_S
+    if tcp_ok_but_dead:
+        # 说清楚是"协议被拒"而不是"连不上"——这两者的排查方向完全不同。
+        cause = (
+            "%d 台服务器端口能连上，但通达信协议握手/取数被拒。"
+            "这通常是协议层被拦（代理、防火墙、公司网络对 TCP 7709 的策略），"
+            "换服务器解决不了。" % tcp_ok_but_dead
+        )
+    else:
+        cause = "内置服务器表里没有一台的 TCP 7709 能连上，请检查网络连通性。"
     raise RuntimeError(
-        "mootdx 通达信服务器均不可用：%d/%d 台端口能连上但通达信协议取数失败，"
-        "其余 TCP 不通。请检查网络环境（代理/防火墙/公司网络常拦 TCP 7709），"
-        "或改用 6 位股票代码直接查询。%.0f 秒内将直接快速失败、不再逐台重探。"
-        % (tcp_ok_but_dead, len(_TDX_SERVERS), _MOOTDX_RETRY_AFTER_S)
+        "mootdx 通达信服务器不可用：%s"
+        "可改用 6 位股票代码直接查询。%.0f 秒内将直接快速失败、不再逐台重探。"
+        % (cause, _MOOTDX_RETRY_AFTER_S)
     )
 
 
