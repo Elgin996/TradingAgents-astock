@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.4.1] — 2026-08-06
+
+三个 issue 的静默失败修复：报告被悄悄截断、mootdx 反复降级、Kimi 报看不懂的 401。
+
+### 修复：mootdx 反复降级、永不恢复（[#90](https://github.com/simonlin1212/TradingAgents-astock/issues/90)）
+
+`_probe_tdx()` 只做 TCP 握手就认定服务器可用，但实测内置服务器表里有相当一部分
+**TCP 三次握手成功、通达信协议握手立刻被 RST**。旧逻辑挑中这种服务器后写进单例
+钉死，于是之后每一次取数都失败、降级到新浪，而且永远不会重选——正是 issue 里
+「一直调用不了数据反复降级」的表现。
+
+- **选服务器要真取到数才算数**：TCP 探测降级为廉价预筛，之后必须真的拉到一根 K 线
+  （`_tdx_client_works()`）才会被采用，否则换下一台。bestip / 裸 factory 两级 fallback
+  同样要过这一关。
+- **坏掉的服务器会被弃用**：所有 mootdx 调用统一走 `_mootdx_call()`，调用失败即丢弃
+  当前 client，下一次重新选服务器，而不是一直钉在死服务器上降级。
+- **全挂时快速失败**：全部服务器验证失败后记负缓存，5 分钟内直接报错，不再每次
+  取数都把整张服务器表重探一遍（旧逻辑下这会把「取不到数」放大成「每个请求卡几十秒」）。
+- 报错文案写明真实原因（端口能连上但协议取数失败 / 检查代理与防火墙对 TCP 7709 的拦截）。
+
+### 修复：报告写到一半结束（[#91](https://github.com/simonlin1212/TradingAgents-astock/issues/91)）
+
+撞的是**输出** token 上限，不是上下文上限，而返回值本身完全合法——没有任何提示，
+用户只会以为模型没写完。
+
+- **截断会明说**：回复因达到输出上限而停止时（Anthropic `stop_reason=max_tokens` /
+  OpenAI 兼容 `finish_reason=length`）打出明确日志，并告诉你调哪个配置项。
+- **新增 `max_tokens` 配置项**（环境变量 `TRADINGAGENTS_MAX_TOKENS`），已接到
+  anthropic / openai 兼容 / google / azure 四条通道——此前 OpenAI 兼容通道根本不转发
+  这个参数，配了也没用。
+- **第三方模型不再被小兜底值截断**：走 `anthropic` 通道跑 Kimi 这类模型时，
+  langchain-anthropic 认不出模型名，会落到一个很小的默认输出上限（1.5.x 是 4096，
+  更早是 1024）。现在这类模型默认放宽到 8192。判据是「模型名是否 claude 开头」，
+  所以 `claude-sonnet-4-5-20250929` 这种带日期的正规 ID 不会被误伤。
+
+### 修复：接 Kimi 报 401 invalid x-api-key（[#89](https://github.com/simonlin1212/TradingAgents-astock/issues/89)）
+
+README 的「方案 G」教用户设 `ANTHROPIC_AUTH_TOKEN`——**这个变量本项目从来不读**
+（它是 Claude Code CLI 的约定）。照着配的用户，请求会发到 api.anthropic.com，
+拿 Kimi 的 token 认证，报一句与 Kimi 无关的 401。
+
+- **启动即报错**：用非 Claude 模型名走 `anthropic` 通道却没配端点时直接中止，
+  并说明要设 `backend_url` / `ANTHROPIC_BASE_URL` 和 `ANTHROPIC_API_KEY`，
+  以及 `ANTHROPIC_AUTH_TOKEN` 为什么不生效。
+- **支持 `ANTHROPIC_BASE_URL` 环境变量**配置端点，不再只能写 config。
+- README 中英文两版的 Kimi 配置段改正，并新增两条 FAQ。
+
+### 测试
+
+新增 `tests/test_mootdx_server_selection.py`（6 例）与 `tests/test_output_token_limit.py`
+（13 例）：覆盖「TCP 通但协议不通的服务器必须跳过」「坏 client 失败后被弃用」
+「全挂后快速失败不重探」「第三方模型拿到显式输出上限」「带日期的 Claude ID 不被误判」
+「截断必须告警、正常收尾不告警」「缺端点时启动即报错」。
+
+---
+
 ## [0.4.0] — 2026-07-31
 
 新增：让节点走**个人 Claude Pro/Max 订阅额度**而非按 token 计费的 Anthropic API。

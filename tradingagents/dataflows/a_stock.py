@@ -91,13 +91,12 @@ def _build_name_code_map() -> tuple[dict[str, str], dict[str, str]]:
     if _name_to_code is not None:
         return _name_to_code, _code_to_name
 
-    client = _get_mootdx_client()
     n2c: dict[str, str] = {}
     c2n: dict[str, str] = {}
 
     try:
         for market in (0, 1):  # 0=SZ, 1=SH
-            stocks = client.stocks(market=market)
+            stocks = _mootdx_call("stocks", market=market)
             if stocks is None or stocks.empty:
                 continue
             for _, row in stocks.iterrows():
@@ -175,8 +174,23 @@ _TDX_SERVERS = [
 ]
 
 
+# 探测用的探针股票：主板老票，任何通达信服务器都应能返回它的日线。
+_TDX_CANARY_SYMBOL = "600519"
+
+# 全部服务器都验不过之后，隔多久才允许再探一轮（秒）。没有这个负缓存，
+# 每一次取数都会把整张服务器表重探一遍（10 台 × TCP 超时），把"取不到数"
+# 放大成"每个请求卡几十秒"。
+_MOOTDX_RETRY_AFTER_S = 300.0
+_mootdx_unavailable_until = 0.0
+
+
 def _probe_tdx(ip: str, port: int, timeout: float = 2.0) -> bool:
-    """TCP 握手探测通达信服务器是否可达。"""
+    """TCP 握手探测通达信服务器端口是否开着。
+
+    ⚠️ 只是**廉价预筛**，通过不代表能取到数：实测存在大量"TCP 三次握手成功、
+    通达信协议握手立刻被 RST"的服务器。选服务器必须再走 `_tdx_client_works()`
+    做一次真实取数验证（#90）。
+    """
     try:
         with socket.create_connection((ip, port), timeout=timeout):
             return True
@@ -184,36 +198,100 @@ def _probe_tdx(ip: str, port: int, timeout: float = 2.0) -> bool:
         return False
 
 
+def _tdx_client_works(client) -> bool:
+    """真实拉一根 K 线来验证这个 client 确实能取数。"""
+    try:
+        df = client.bars(symbol=_TDX_CANARY_SYMBOL, category=4, offset=1)
+        return df is not None and not df.empty
+    except Exception:
+        return False
+
+
+def reset_mootdx_client() -> None:
+    """丢弃缓存的 client，让下一次调用重新选服务器。
+
+    单例一旦钉在一台"当时能用、后来挂了"的服务器上，之后每次取数都失败降级且
+    永远不会重选。数据调用发现 mootdx 出错时调它，下一次就能换一台（#90）。
+    """
+    global _mootdx_client, _mootdx_unavailable_until
+    _mootdx_client = None
+    _mootdx_unavailable_until = 0.0
+
+
 def _get_mootdx_client():
     """Lazy-init 健壮版 mootdx Quotes client（TCP 连接，可复用）。
 
-    规避 mootdx 0.11.x 全新安装的 BESTIP 空串 bug：先 TCP 探测内置服务器列表、
-    用第一个可达的显式 server 绕过 BESTIP；三级 fallback（bestip 测速 → 裸 factory →
-    明确 RuntimeError）保证 IP 老化/换网/老用户场景都能工作。
+    选服务器的顺序：内置服务器表（TCP 预筛 + 真实取数验证）→ bestip 测速 →
+    裸 factory（老用户 config 里已有 IP）。每一级都必须真正取到数据才会被采用，
+    避免把 client 钉死在一台"端口开着但协议不通"的服务器上（#90）。
+    全部失败时抛 RuntimeError，并在 `_MOOTDX_RETRY_AFTER_S` 内直接快速失败，
+    不再逐台重探。
     """
-    global _mootdx_client
+    global _mootdx_client, _mootdx_unavailable_until
     if _mootdx_client is not None:
         return _mootdx_client
 
+    now = time.time()
+    if now < _mootdx_unavailable_until:
+        raise RuntimeError(
+            "mootdx 通达信服务器暂不可用（%.0f 秒内不再重试）。"
+            "已尝试全部内置服务器：端口能连上的也没能完成通达信协议取数。"
+            "请检查网络环境（代理/防火墙/公司网络常拦 TCP 7709），"
+            "或改用 6 位股票代码直接查询。" % (_mootdx_unavailable_until - now)
+        )
+
     from mootdx.quotes import Quotes
 
+    tcp_ok_but_dead = 0
     for ip, port in _TDX_SERVERS:
-        if _probe_tdx(ip, port):
-            _mootdx_client = Quotes.factory(market="std", server=(ip, port))
+        if not _probe_tdx(ip, port):
+            continue
+        try:
+            candidate = Quotes.factory(market="std", server=(ip, port))
+        except Exception as e:
+            logger.debug("mootdx factory failed for %s:%s — %s", ip, port, e)
+            continue
+        if _tdx_client_works(candidate):
+            logger.info("mootdx server selected: %s:%s", ip, port)
+            _mootdx_client = candidate
             return _mootdx_client
+        tcp_ok_but_dead += 1
+        logger.debug("mootdx %s:%s TCP 可连但取数失败，换下一台", ip, port)
+
+    # fallback：bestip 测速 / 裸 factory（老用户 config 已有 IP）。同样要验证。
+    for kwargs in ({"bestip": True}, {}):
+        try:
+            candidate = Quotes.factory(market="std", **kwargs)
+        except Exception as e:
+            logger.debug("mootdx factory(%s) failed — %s", kwargs, e)
+            continue
+        if _tdx_client_works(candidate):
+            logger.info("mootdx client from factory(%s)", kwargs)
+            _mootdx_client = candidate
+            return _mootdx_client
+
+    _mootdx_unavailable_until = time.time() + _MOOTDX_RETRY_AFTER_S
+    raise RuntimeError(
+        "mootdx 通达信服务器均不可用：%d/%d 台端口能连上但通达信协议取数失败，"
+        "其余 TCP 不通。请检查网络环境（代理/防火墙/公司网络常拦 TCP 7709），"
+        "或改用 6 位股票代码直接查询。%.0f 秒内将直接快速失败、不再逐台重探。"
+        % (tcp_ok_but_dead, len(_TDX_SERVERS), _MOOTDX_RETRY_AFTER_S)
+    )
+
+
+def _mootdx_call(method: str, **kwargs):
+    """调用 mootdx 的某个方法，失败就弃用当前服务器。
+
+    选中的服务器随时可能挂掉；不弃用的话单例会一直指着它，之后每次取数都失败降级
+    且永不重选（#90 的「反复降级」）。取 client 本身失败时不清缓存——那条路径已经
+    在 `_get_mootdx_client` 里做了负缓存，清掉等于取消快速失败。
+    """
+    client = _get_mootdx_client()
     try:
-        _mootdx_client = Quotes.factory(market="std", bestip=True)  # fallback 1
-        return _mootdx_client
+        return getattr(client, method)(**kwargs)
     except Exception:
-        pass
-    try:
-        _mootdx_client = Quotes.factory(market="std")  # fallback 2（老用户 config 已有 IP）
-        return _mootdx_client
-    except Exception as e:
-        raise RuntimeError(
-            "mootdx 通达信服务器均不可达（TCP 7709）。海外网络通常全部超时，"
-            "请走国内代理或直接使用 6 位股票代码。原始错误：%s" % e
-        ) from e
+        reset_mootdx_client()
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -505,8 +583,7 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
 
     # Fetch from mootdx — 800 daily bars (~3 years of trading days)
     try:
-        client = _get_mootdx_client()
-        df = client.bars(symbol=code, category=4, offset=800)
+        df = _mootdx_call("bars", symbol=code, category=4, offset=800)
 
         if df is None or df.empty:
             raise ValueError(f"No OHLCV data from mootdx for {code}")
@@ -564,8 +641,7 @@ def get_stock_data(
 
     data_source = "mootdx (TCP)"
     try:
-        client = _get_mootdx_client()
-        df = client.bars(symbol=code, category=4, offset=800)
+        df = _mootdx_call("bars", symbol=code, category=4, offset=800)
 
         if df is None or df.empty:
             raise ValueError(f"No data from mootdx for {code}")
@@ -751,8 +827,7 @@ def get_fundamentals(
 
         # --- mootdx: financial snapshot (quarterly) ---
         try:
-            client = _get_mootdx_client()
-            fin = client.finance(symbol=code)
+            fin = _mootdx_call("finance", symbol=code)
             if fin is not None and not (
                 isinstance(fin, pd.DataFrame) and fin.empty
             ):
@@ -1307,8 +1382,7 @@ def get_insider_transactions(
     code = _normalize_ticker(ticker)
 
     try:
-        client = _get_mootdx_client()
-        text = client.F10(symbol=code, name="股东研究")
+        text = _mootdx_call("F10", symbol=code, name="股东研究")
 
         if not text or not text.strip():
             return f"No insider/shareholder data found for A-stock '{code}'"

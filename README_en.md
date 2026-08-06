@@ -177,7 +177,13 @@ OPENAI_API_KEY=sk-xxx
 ANTHROPIC_API_KEY=sk-ant-xxx
 
 # ── Option G: Kimi (Anthropic-compatible API) ───────────────────────────────
-ANTHROPIC_AUTH_TOKEN=your-kimi-token
+ANTHROPIC_API_KEY=your-kimi-token
+ANTHROPIC_BASE_URL=https://api.kimi.com/coding/
+# ⚠️ Both are required. With the key but no endpoint, requests go to Anthropic
+#    itself and fail with "401 invalid x-api-key". The endpoint can also be set
+#    as `backend_url` in the config (see below).
+# ⚠️ Do not use ANTHROPIC_AUTH_TOKEN — that is the Claude Code CLI convention.
+#    This project runs on langchain, which only reads ANTHROPIC_API_KEY.
 
 # ── Option H: Any OpenAI-compatible gateway (9Router / AI Router / self-hosted proxy) ──
 OPENAI_COMPATIBLE_API_KEY=sk-xxx     # Also accepts OPENAI_API_KEY
@@ -271,6 +277,7 @@ All configuration is passed in through the `config` dictionary. Complete options
 | `deep_think_llm` | `"MiniMax-M2.7"` | Model used by the Research Manager + Portfolio Manager |
 | `quick_think_llm` | `"MiniMax-M2.7-highspeed"` | Model used by all Analysts / Researchers / Traders |
 | `backend_url` | `None` | Custom API endpoint / third-party relay gateway. Can be filled in via the Web UI sidebar or the `.env` file's `BACKEND_URL`; useful for accessing Claude / OpenAI from within China via a proxy |
+| `max_tokens` | `None` | Max output tokens per reply. `None` = the provider's own default. **If a report stops mid-sentence, raise this first** (it is the output cap, not the context window); also settable via `TRADINGAGENTS_MAX_TOKENS`. #91 |
 | `output_language` | `"Chinese"` | Language for report output (internal debates are always in English) |
 | `market_lookback_days` | `None` | Lookback period in days for technical analysis (analysis range = start date → analysis date). Automatically calculated from the "data start date" in Web/CLI; `None` = model chooses (~30 days). #16 |
 | `max_debate_rounds` | `1` | Number of Bull vs Bear debate rounds |
@@ -285,6 +292,21 @@ Each provider uses **its own environment variable**, not `OPENAI_API_KEY`: DeepS
 
 **Q: Want to connect to an OpenAI-compatible third-party gateway/relay (9Router, AI Router, self-built proxy) with a custom base_url + model?**
 Use the **「OpenAI-Compatible (Custom base_url)」** option (added in v0.2.20). In the Web sidebar, select it under "LLM Provider" → Manually enter the model name supported by your gateway under "Fast/Deep Think Model ID" → Enter your gateway address under "API Base URL" (e.g., `https://your-relay.example/v1`) → Set `OPENAI_COMPATIBLE_API_KEY=your_key` in `.env` (it also accepts `OPENAI_API_KEY`). For CLI, after selecting `OpenAI-Compatible`, it will prompt for the Base URL. It uses standard Chat Completions (not OpenAI Responses API, for best compatibility), and the model name can be freely entered without being restricted by the built-in list. The equivalent configuration is: `llm_provider="openai_compatible"` + `backend_url="<your_gateway>"` + `deep_think_llm/quick_think_llm="<your_model>"`.
+
+**Q: The report stops halfway through, but the context window was nowhere near full?**
+You are hitting the **output** cap, not the context cap — how many tokens a model may emit in one reply is a separate limit. Since v0.4.1 this truncation is reported in the logs (`因为达到输出上限被截断` / truncated at the output limit) instead of silently handing you half a report. Raise it with `max_tokens` in the config (e.g. `"max_tokens": 16000`) or the `TRADINGAGENTS_MAX_TOKENS` environment variable.
+
+Also note: when you run a **third-party model name (Kimi and friends) through the `anthropic` provider**, langchain does not recognise the model and applies a very small default output cap, which shows up as uniformly short reports. Since v0.4.1 those models default to 8192; set `max_tokens` explicitly if you need more. #91
+
+**Q: Kimi fails with `401 invalid x-api-key`?**
+The request reached **Anthropic itself**, not Kimi — you supplied the key but not the endpoint. Both are required:
+
+```bash
+ANTHROPIC_API_KEY=your-kimi-token
+ANTHROPIC_BASE_URL=https://api.kimi.com/coding/   # or set backend_url in the config
+```
+
+Note that **`ANTHROPIC_AUTH_TOKEN` has no effect here** — that is the Claude Code CLI convention. This project runs on langchain, which only reads `ANTHROPIC_API_KEY`. Since v0.4.1, using a non-Claude model name without an endpoint fails **at startup** with an explanation instead of an opaque 401 from Anthropic. #89
 
 **Q: Exporting PDF gives `UnicodeEncodeError: 'latin-1' codec can't encode`?**
 Your environment has **an old version of `fpdf` (pyfpdf)** installed, which conflicts with the `fpdf2` used by this project, as both are imported under the name `fpdf`. Execute: `pip uninstall -y fpdf && pip install "fpdf2>=2.8.6"`. If this doesn't work, you can use the "Download Markdown" export option instead (zero dependencies, always available).

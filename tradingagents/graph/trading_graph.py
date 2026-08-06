@@ -277,6 +277,11 @@ class TradingAgentsGraph:
         kwargs = {}
         provider = self.config.get("llm_provider", "").lower()
 
+        # 与 provider 无关：单次回复的输出上限。撞上它就是报告写一半被截断（#91）。
+        max_tokens = self.config.get("max_tokens")
+        if max_tokens:
+            kwargs["max_tokens"] = max_tokens
+
         if provider == "google":
             thinking_level = self.config.get("google_thinking_level")
             if thinking_level:

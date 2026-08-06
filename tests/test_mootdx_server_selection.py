@@ -1,0 +1,151 @@
+"""mootdx 服务器选取（#90）。
+
+现实里存在大量"TCP 三次握手成功、通达信协议握手立刻被 RST"的服务器。旧实现
+只做 TCP 探测就把 client 钉进单例，于是之后每一次取数都失败降级、且永远不会
+重选服务器。这些用例锁死修复后的三条行为：
+
+1. TCP 通但取不到数的服务器必须被跳过，继续试下一台；
+2. 全部失败后要抛错，并在冷却期内快速失败（不再逐台重探）；
+3. 选中的服务器之后挂掉时，要弃用它，下次换一台。
+"""
+
+import pytest
+
+from tradingagents.dataflows import a_stock
+
+
+class FakeQuotesClient:
+    """假的 mootdx client：可配置成"协议层直接炸"或"正常返回"。"""
+
+    def __init__(self, ip, works: bool):
+        self.ip = ip
+        self.works = works
+        self.calls = 0
+
+    def bars(self, **kwargs):
+        self.calls += 1
+        if not self.works:
+            raise ConnectionResetError("[Errno 54] Connection reset by peer")
+        import pandas as pd
+
+        return pd.DataFrame({"close": [1700.0]})
+
+
+@pytest.fixture
+def fake_tdx(monkeypatch):
+    """把服务器表、TCP 探测、Quotes.factory 全部换成可控假件。"""
+    import mootdx.quotes
+
+    servers = [("1.1.1.1", 7709), ("2.2.2.2", 7709), ("3.3.3.3", 7709)]
+    state = {
+        "tcp_open": {ip for ip, _ in servers},  # TCP 端口开着的
+        "protocol_ok": set(),                   # 协议层真能取数的
+        "probe_calls": [],
+        "clients": {},
+    }
+
+    monkeypatch.setattr(a_stock, "_TDX_SERVERS", servers)
+    monkeypatch.setattr(a_stock, "_mootdx_client", None)
+    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", 0.0)
+
+    def fake_probe(ip, port, timeout=2.0):
+        state["probe_calls"].append(ip)
+        return ip in state["tcp_open"]
+
+    monkeypatch.setattr(a_stock, "_probe_tdx", fake_probe)
+
+    class FakeQuotes:
+        @staticmethod
+        def factory(market="std", server=None, **kwargs):
+            ip = server[0] if server else "bestip"
+            client = FakeQuotesClient(ip, works=ip in state["protocol_ok"])
+            state["clients"][ip] = client
+            return client
+
+    monkeypatch.setattr(mootdx.quotes, "Quotes", FakeQuotes)
+    return state
+
+
+def test_skips_server_that_accepts_tcp_but_fails_protocol(fake_tdx):
+    """1.1.1.1 端口开着却取不到数 → 必须跳过它，选到真正可用的 2.2.2.2。"""
+    fake_tdx["protocol_ok"] = {"2.2.2.2"}
+
+    client = a_stock._get_mootdx_client()
+
+    assert client.ip == "2.2.2.2"
+    # 坏服务器被真实取数验证挡下来了，而不是被采纳
+    assert fake_tdx["clients"]["1.1.1.1"].works is False
+
+
+def test_selected_client_is_cached(fake_tdx):
+    """选中之后要复用，不能每次调用都重新逐台探测。"""
+    fake_tdx["protocol_ok"] = {"1.1.1.1"}
+
+    first = a_stock._get_mootdx_client()
+    probes_after_first = len(fake_tdx["probe_calls"])
+    second = a_stock._get_mootdx_client()
+
+    assert first is second
+    assert len(fake_tdx["probe_calls"]) == probes_after_first
+
+
+def test_all_servers_dead_raises_then_fails_fast(fake_tdx):
+    """全挂 → 抛错；冷却期内第二次调用直接失败，不再重探。"""
+    fake_tdx["protocol_ok"] = set()
+
+    with pytest.raises(RuntimeError, match="通达信"):
+        a_stock._get_mootdx_client()
+    probes_after_first = len(fake_tdx["probe_calls"])
+    assert probes_after_first >= len(fake_tdx["tcp_open"])
+
+    with pytest.raises(RuntimeError, match="不再重探|不再重试"):
+        a_stock._get_mootdx_client()
+    # 快速失败：没有再打一遍服务器表
+    assert len(fake_tdx["probe_calls"]) == probes_after_first
+
+
+def test_tcp_unreachable_servers_are_not_probed_for_data(fake_tdx):
+    """TCP 不通的直接跳过，不去建 client。"""
+    fake_tdx["tcp_open"] = {"3.3.3.3"}
+    fake_tdx["protocol_ok"] = {"3.3.3.3"}
+
+    client = a_stock._get_mootdx_client()
+
+    assert client.ip == "3.3.3.3"
+    assert "1.1.1.1" not in fake_tdx["clients"]
+    assert "2.2.2.2" not in fake_tdx["clients"]
+
+
+def test_mootdx_call_discards_client_after_failure(fake_tdx):
+    """选中的服务器后来挂了 → 弃用它，下一次换一台，而不是一直降级。"""
+    fake_tdx["protocol_ok"] = {"1.1.1.1", "2.2.2.2"}
+
+    a_stock._mootdx_call("bars", symbol="600519")
+    assert a_stock._mootdx_client is not None
+    assert a_stock._mootdx_client.ip == "1.1.1.1"
+
+    # 服务器挂掉：当前 client 的后续调用开始报错
+    a_stock._mootdx_client.works = False
+    with pytest.raises(ConnectionResetError):
+        a_stock._mootdx_call("bars", symbol="600519")
+
+    # 关键断言：坏 client 已被丢弃，而不是继续钉在单例里
+    assert a_stock._mootdx_client is None
+
+    # 下一次调用重新选服务器，落到还活着的那台
+    fake_tdx["protocol_ok"] = {"2.2.2.2"}
+    a_stock._mootdx_call("bars", symbol="600519")
+    assert a_stock._mootdx_client.ip == "2.2.2.2"
+
+
+def test_get_client_failure_does_not_clear_negative_cache(fake_tdx):
+    """取 client 失败不该清掉负缓存，否则快速失败就失效了。"""
+    fake_tdx["protocol_ok"] = set()
+
+    with pytest.raises(RuntimeError):
+        a_stock._mootdx_call("bars", symbol="600519")
+    probes = len(fake_tdx["probe_calls"])
+
+    with pytest.raises(RuntimeError):
+        a_stock._mootdx_call("bars", symbol="600519")
+    assert len(fake_tdx["probe_calls"]) == probes
