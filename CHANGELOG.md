@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.3] — 2026-08-06
+
+港股/美股代码不再被当成 A 股静默查询（[#43](https://github.com/simonlin1212/TradingAgents-astock/issues/43) 前置修复）。
+
+`_normalize_ticker()` 的文档写着"返回纯 6 位代码"，但从不校验位数：港股 `00700`
+/ `0700.HK`、美股 `AAPL` 都被**原样放行**，然后拿去问 mootdx / 腾讯 / 东财。这些
+源对不存在的代码往往不报错，只返回空值或僵尸报价（北交所 920 号段踩过同类问题），
+于是模型会拿着一份看起来正常、实际属于别的市场的数据写完整篇报告——报告里完全
+看不出来。
+
+- **一个卡点覆盖 15 个数据接口**：`_normalize_ticker` 是所有 vendor 方法的必经之路。
+- 港股代码报错时**指明去处**（姊妹项目 global-stock-data）和 roadmap（#43），
+  而不是只说"不支持"。
+- A 股各种写法（`SH600519` / `600519.SH` / `sz000001` / 北交所 `920002`）一个都
+  不受影响，24 例测试两侧都锁。
+
+港股多 Agent 分析本身仍在 roadmap：数据层可行性已验证（腾讯 / 新浪 / 东财 push2 /
+Yahoo K线 / 东财港股三表 五个端点实测均可用），但 A 股特化的政策 / 游资 / 解禁三个
+角色对港股不适用，需要单独设计角色集。
+
+---
+
 ## [0.5.2] — 2026-08-06
 
 新增决策绩效统计，并修掉一个会污染它的评级解析漏洞。

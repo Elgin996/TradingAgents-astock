@@ -58,10 +58,42 @@ def _get_prefix(code: str) -> str:
     return "sz"
 
 
+def _reject_non_a_share(original: str, code: str) -> None:
+    """港股/美股代码走到 A 股数据层时当场报错，而不是拿去查 A 股（#43）。
+
+    A 股代码恒为 6 位数字。港股是 4~5 位（`00700`）或带 `.HK` 后缀，美股是字母。
+    这些代码此前会被**原样放行**，然后拿去问 mootdx / 腾讯 / 东财——而这些源对
+    不存在的代码往往不报错，只返回空值或僵尸报价（北交所 920 号段就踩过，见
+    `_normalize_ticker` 上游的 `_get_prefix`）。于是模型会拿着一份看起来正常、
+    实际属于别的市场或根本不存在的数据写完整篇报告，报告里完全看不出来。
+    """
+    if code.isdigit() and len(code) == 6:
+        return
+    upper = original.strip().upper()
+    if upper.endswith(".HK") or (code.isdigit() and len(code) in (4, 5)):
+        raise ValueError(
+            f"'{original}' 是港股代码。本数据层只支持 A 股（6 位数字代码，"
+            f"如 600519 / 000001）。港股数据请用姊妹项目 global-stock-data，"
+            f"多 Agent 港股分析仍在 roadmap（issue #43）。"
+        )
+    if code and not code.isdigit():
+        raise ValueError(
+            f"'{original}' 不是 A 股代码。本数据层只支持 A 股 6 位数字代码"
+            f"（如 600519）；美股/港股请用姊妹项目 global-stock-data。"
+        )
+    raise ValueError(
+        f"'{original}' 不是有效的 A 股代码：A 股代码恒为 6 位数字（如 600519），"
+        f"这里解析出的是 '{code}'。"
+    )
+
+
 def _normalize_ticker(symbol: str) -> str:
     """Strip exchange prefix/suffix, return pure 6-digit code.
 
     Handles: '688017', 'SH688017', '688017.SH', 'sh688017'
+
+    非 A 股代码（港股 `00700` / `0700.HK`、美股 `AAPL`）会直接报错，不再原样
+    放行去查 A 股数据源（#43）。
     """
     s = symbol.strip().upper()
     # Remove .SH / .SZ / .BJ suffix
@@ -74,7 +106,9 @@ def _normalize_ticker(symbol: str) -> str:
         if s.startswith(prefix):
             s = s[len(prefix) :]
             break
-    return safe_ticker_component(s)
+    code = safe_ticker_component(s)
+    _reject_non_a_share(symbol, code)
+    return code
 
 
 # ---------------------------------------------------------------------------
