@@ -159,6 +159,38 @@ def resolve_ticker(user_input: str) -> str:
 
 
 # ---------------------------------------------------------------------------
+# 未来函数防护（point-in-time）
+# ---------------------------------------------------------------------------
+
+
+def _is_historical(curr_date) -> bool:
+    """分析日期是否早于今天。早于今天 = 这次是在复盘历史，不能拿实时数据当事实。"""
+    if not curr_date:
+        return False
+    try:
+        return (
+            datetime.strptime(str(curr_date)[:10], "%Y-%m-%d").date()
+            < datetime.now().date()
+        )
+    except ValueError:
+        return False
+
+
+def _snapshot_notice(curr_date: str, what: str) -> str:
+    """实时快照被用在历史日期上时，在正文顶部明说。
+
+    有些数据源只提供"此刻"的值（腾讯实时行情、同花顺当前一致预期），拿不到
+    某个历史日的原值。既然补不上，就必须**说出来**——否则模型会把今天的估值
+    当成分析日当天的事实写进报告，而这种污染在报告里完全看不出来。
+    """
+    return (
+        f"⚠️ 未来函数警告：以下{what}是**此刻的实时快照**，不是 {curr_date} 当天的值。"
+        f"本数据源不提供历史时点数据。在复盘历史日期时，**不得**把这些数字当作"
+        f"{curr_date} 当天已知的事实，也不要据此推断当时的判断。\n"
+    )
+
+
+# ---------------------------------------------------------------------------
 # mootdx client (singleton)
 # ---------------------------------------------------------------------------
 
@@ -828,6 +860,10 @@ def get_fundamentals(
 
     try:
         lines = []
+        # 腾讯行情只有"此刻"的 PE/PB/市值，拿不到历史时点值。复盘历史日期时
+        # 必须明说，否则模型会把今天的估值写成分析日当天的事实（未来函数）。
+        if _is_historical(curr_date):
+            lines.append(_snapshot_notice(curr_date, "估值与行情数据"))
 
         # --- Tencent: real-time valuation ---
         try:
@@ -1448,7 +1484,7 @@ def get_insider_transactions(
 
 def get_profit_forecast(
     ticker: Annotated[str, "A-stock code"],
-    curr_date: Annotated[str, "current date (unused, for interface compat)"] = None,
+    curr_date: Annotated[str, "current date — 用于判断是否在复盘历史"] = None,
 ) -> str:
     """Get consensus EPS forecasts with forward valuation (同花顺 direct HTTP)."""
     code = _normalize_ticker(ticker)
@@ -1465,6 +1501,9 @@ def get_profit_forecast(
             f"# Retrieved: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
             "",
         ]
+        # 一致预期是"当前"的分析师预测，没有历史时点版本。同上，必须明说。
+        if _is_historical(curr_date):
+            lines.insert(0, _snapshot_notice(curr_date, "分析师一致预期"))
 
         eps_by_year = {}
         for _, row in df.iterrows():
@@ -1888,6 +1927,14 @@ def get_fund_flow(
         "",
     ]
 
+    historical = _is_historical(curr_date)
+    if historical:
+        # 分钟级资金流只有"今天"的，复盘历史日期时整段都是未来数据，直接不取。
+        lines.append(
+            f"（分析日期 {curr_date} 早于今天，已略去实时分钟资金流——"
+            f"那是今天的盘中数据，不是 {curr_date} 当天的。）\n"
+        )
+
     try:
         # Realtime minute-level fund flow
         url_rt = "https://push2.eastmoney.com/api/qt/stock/fflow/kline/get"
@@ -1896,9 +1943,11 @@ def get_fund_flow(
             "fields1": "f1,f2,f3,f7",
             "fields2": "f51,f52,f53,f54,f55,f56,f57",
         }
-        r = _em_get(url_rt, params=params_rt, timeout=10)
-        d = r.json()
-        klines = d.get("data", {}).get("klines", [])
+        klines = []
+        if not historical:
+            r = _em_get(url_rt, params=params_rt, timeout=10)
+            d = r.json()
+            klines = d.get("data", {}).get("klines", [])
 
         if klines:
             lines.append(
@@ -1949,10 +1998,20 @@ def get_fund_flow(
             dh = rh.json()
             hist_klines = dh.get("data", {}).get("klines", [])
 
+            # 逐行按分析日截断：接口返回的是"从今天回溯 20 个交易日"，
+            # 在历史日期上直接打印等于把未来的资金流喂给模型（未来函数）。
+            if historical:
+                cutoff = str(curr_date)[:10]
+                hist_klines = [
+                    k for k in hist_klines if k.split(",")[0][:10] <= cutoff
+                ]
+
             if hist_klines:
                 lines.append(
                     f"\n## Historical Daily Fund Flow "
-                    f"(last {len(hist_klines)} trading days)"
+                    f"(last {len(hist_klines)} trading days"
+                    + (f", 截至 {str(curr_date)[:10]}" if historical else "")
+                    + ")"
                 )
                 lines.append(
                     "Date | 主力净流入(万) | 大单(万) "

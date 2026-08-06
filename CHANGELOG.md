@@ -6,6 +6,40 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.1] — 2026-08-06
+
+修复未来函数：在历史日期上跑分析时，数据层会把"今天"的数据当成分析日当天的事实。
+
+上游 TradingAgents 把这类问题称作 backtesting date fidelity（#475），它的修复覆盖
+yfinance 新闻。本仓库的 A 股数据层做了同类审计（AST 扫全部 15 个接口），发现**三个
+函数收了日期参数却完全没有使用**：
+
+| 函数 | 原行为 | 处理 |
+|------|--------|------|
+| `get_fund_flow` | 今天的分钟资金流 + 从**今天**回溯 20 个交易日 | 真正做时点截断 |
+| `get_fundamentals` | 腾讯**实时** PE/PB/市值 | 数据源无历史时点值 → 明确告警 |
+| `get_profit_forecast` | 同花顺**当前**一致预期 | 同上 |
+
+在 2026-06-01 分析某只股票时，这三个接口都会返回今天的数据——而报告里完全看不出
+被污染了，属于静默失败。
+
+### 修复
+
+- **`get_fund_flow` 做 point-in-time 截断**：历史日线逐行按 `curr_date` 过滤；
+  复盘历史日期时**整段不取**实时分钟资金流（那只有"今天"的），并在正文说明为什么
+  略去——不说的话用户会以为接口坏了。当天分析行为不变。
+- **`get_fundamentals` / `get_profit_forecast` 加未来函数告警**：这两个数据源根本
+  不提供历史时点值，补不上就必须说出来。正文顶部插入警告，点名分析日期，并给模型
+  明确指令「**不得**把这些数字当作当天已知的事实」。当天分析不显示告警，不误伤正常用法。
+- 新增 `_is_historical()` / `_snapshot_notice()` 两个共用工具，避免各处各写一套。
+
+### 测试
+
+新增 `tests/test_lookahead_guard.py`（15 例），含两类反向边界：**当天分析不能被误伤**
+（实时资金流仍要取、不显示告警），以及**解析不了的日期不能当成历史**（否则误伤实时分析）。
+
+---
+
 ## [0.5.0] — 2026-08-06
 
 两项功能：分角色模型（可选），以及让情绪分析师看得到硬数据。
