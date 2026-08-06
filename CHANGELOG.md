@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.4] — 2026-08-06
+
+干净 clone 上 `pytest` 从 11 red 变成全绿，并修掉藏在其中的一个计费护栏隐患。
+
+### 修复：`ClaudeSDKError` 占位符退化成 `Exception`，让计费护栏失效
+
+可选依赖 `claude-agent-sdk` 没装时，模块把 `ClaudeSDKError` 占位成 **`Exception`**
+（注释写的是"placeholder so `except` clauses never NameError"）。但
+`ClaudeSDKError` 会进 `_FALLBACK_ERRORS` —— 那个元组决定「哪些错误可以降级到按
+token 计费的 provider」。一旦退化成 `Exception`，`isinstance(任何异常, ...)` 恒为真，
+连**刻意排除在外**的 `_AuthError`（订阅凭据失效）也会被判成可降级。
+
+而这条护栏存在的全部意义，就是不让"订阅 token 过期"变成"悄悄开始烧 API 账单"。
+
+改用独立的 `_MissingSDKError` 占位：`except ClaudeSDKError` 一样不会 NameError，
+元组永远不会变成 catch-all，保护这条护栏的两条测试也不再依赖可选依赖是否安装。
+
+### 修复：9 个用例在没装可选依赖时红着，而不是跳过
+
+`tests/test_agent_sdk_provider.py` 里有 9 个用例会走到 SDK 自己的 API
+（`ClaudeAgentOptions` / `create_sdk_mcp_server`），没装依赖就报 ImportError。
+同一文件里另外 3 个用例早已用 `skipif` 处理过同样情况——这 9 个只是漏加。
+
+长期红的真实代价是**没人再看**：本次排查前，这 11 个红被反复当成"已知的缺依赖噪音"
+掠过，而其中两条恰恰是上面那条计费护栏的测试。现在按文件既有约定统一加
+`requires_sdk` 标记。
+
+**干净 clone（`pip install -e .` 不带 `[agentsdk]`）跑 `pytest`：303 passed,
+13 skipped, 0 failed。**
+
+---
+
 ## [0.5.3] — 2026-08-06
 
 港股/美股代码不再被当成 A 股静默查询（[#43](https://github.com/simonlin1212/TradingAgents-astock/issues/43) 前置修复）。
