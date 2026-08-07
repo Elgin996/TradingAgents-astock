@@ -135,9 +135,17 @@ def _render_analysis_controls(raw_ticker: str, trade_date_value: date) -> None:
 def _render_llm_config() -> None:
     """Render LLM provider and model selection controls."""
 
+    configured_provider = os.getenv("TRADINGAGENTS_LLM_PROVIDER", "").strip().lower()
+    provider_default = (
+        _PROVIDER_KEYS.index(configured_provider)
+        if configured_provider in _PROVIDER_KEYS
+        else 0
+    )
+
     provider_idx = st.selectbox(
         "LLM 供应商",
         range(len(_PROVIDERS)),
+        index=provider_default,
         format_func=lambda i: _PROVIDER_DISPLAY[i],
         key="llm_provider_idx",
         help="选择你配置了 API Key 的供应商",
@@ -172,10 +180,33 @@ def _render_llm_config() -> None:
         )
         st.session_state["deep_think_llm"] = deep_values[deep_idx]
     else:
-        custom_quick = st.text_input("快速思考模型 ID", key="custom_quick_model")
-        custom_deep = st.text_input("深度思考模型 ID", key="custom_deep_model")
+        custom_quick = st.text_input(
+            "快速思考模型 ID",
+            value=os.getenv("TRADINGAGENTS_QUICK_THINK_LLM", ""),
+            key="custom_quick_model",
+        )
+        custom_deep = st.text_input(
+            "深度思考模型 ID",
+            value=os.getenv("TRADINGAGENTS_DEEP_THINK_LLM", ""),
+            key="custom_deep_model",
+        )
         st.session_state["quick_think_llm"] = custom_quick
         st.session_state["deep_think_llm"] = custom_deep
+
+    if provider_key == "openrouter":
+        effort_values = ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
+        effort_labels = ["使用模型默认值", "关闭推理", "Minimal", "Low", "Medium", "High", "XHigh", "Max"]
+        configured_effort = os.getenv("TRADINGAGENTS_REASONING_EFFORT", "").strip().lower()
+        effort_default = effort_values.index(configured_effort) if configured_effort in effort_values else 0
+        effort_idx = st.selectbox(
+            "推理 Effort",
+            range(len(effort_values)),
+            index=effort_default,
+            format_func=lambda i: effort_labels[i],
+            key="openrouter_reasoning_effort_idx",
+            help="仅在模型支持推理时生效。更高 Effort 会增加推理 token 用量与成本。",
+        )
+        st.session_state["openrouter_reasoning_effort"] = effort_values[effort_idx] or None
 
     base_url_required = provider_key == "openai_compatible"
     st.text_input(

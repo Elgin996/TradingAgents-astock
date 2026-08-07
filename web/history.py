@@ -13,12 +13,16 @@ from typing import Any
 from tradingagents.default_config import DEFAULT_CONFIG
 
 
-_INCOMPLETE_TASKS_FILE = Path.home() / ".tradingagents" / "incomplete_tasks.json"
+# Keep web history alongside the configured report directory.  This is normally
+# ~/.tradingagents, but users may redirect all runtime data with the
+# TRADINGAGENTS_* environment variables.
+_INCOMPLETE_TASKS_FILE = Path(DEFAULT_CONFIG["results_dir"]).parent / "incomplete_tasks.json"
 _INCOMPLETE_TASKS_LOCK = threading.Lock()
 
 
 def _results_dir() -> Path:
-    return Path.home() / ".tradingagents" / "logs"
+    """Return the configured report directory, not a hard-coded home path."""
+    return Path(DEFAULT_CONFIG["results_dir"])
 
 
 def get_history() -> list[dict[str, str]]:

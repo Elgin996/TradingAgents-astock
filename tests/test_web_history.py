@@ -8,6 +8,25 @@ import threading
 from web import history
 
 
+def test_history_uses_configured_results_directory(tmp_path, monkeypatch):
+    logs = tmp_path / "project-data" / "logs"
+    log_dir = logs / "600370" / "TradingAgentsStrategy_logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "full_states_log_2026-06-02.json").write_text(
+        json.dumps({"final_trade_decision": "HOLD"}),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(history.DEFAULT_CONFIG, "results_dir", str(logs))
+
+    assert history.get_history() == [
+        {
+            "ticker": "600370",
+            "date": "2026-06-02",
+            "path": str(log_dir / "full_states_log_2026-06-02.json"),
+        }
+    ]
+
+
 def test_incomplete_task_round_trip(tmp_path, monkeypatch):
     index = tmp_path / "incomplete_tasks.json"
     logs = tmp_path / "logs"
