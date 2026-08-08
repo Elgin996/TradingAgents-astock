@@ -185,10 +185,15 @@ class OpenAIClient(BaseLLMClient):
                     "（例如 https://your-relay.example/v1）。"
                 )
             llm_kwargs["base_url"] = self.base_url
-            api_key = (
-                os.environ.get("OPENAI_COMPATIBLE_API_KEY")
-                or os.environ.get("OPENAI_API_KEY")
-            )
+            compatible_key = os.environ.get("OPENAI_COMPATIBLE_API_KEY")
+            api_key = compatible_key or os.environ.get("OPENAI_API_KEY")
+            if not compatible_key and api_key:
+                if "openai.com" not in (self.base_url or ""):
+                    logger.warning(
+                        "openai_compatible: OPENAI_COMPATIBLE_API_KEY 未设置，正在把 OPENAI_API_KEY "
+                        "发送到第三方网关 %s。如不是你的预期，请单独设置 OPENAI_COMPATIBLE_API_KEY。",
+                        self.base_url,
+                    )
             if api_key:
                 llm_kwargs["api_key"] = api_key
             elif "api_key" not in self.kwargs:

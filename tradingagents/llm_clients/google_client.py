@@ -1,4 +1,7 @@
+import logging
 from typing import Any, Optional
+
+logger = logging.getLogger(__name__)
 
 try:
     from langchain_google_genai import ChatGoogleGenerativeAI
@@ -70,8 +73,24 @@ class GoogleClient(BaseLLMClient):
                     thinking_level = "low"
                 llm_kwargs["thinking_level"] = thinking_level
             else:
-                # Gemini 2.5: map to thinking_budget
-                llm_kwargs["thinking_budget"] = -1 if thinking_level == "high" else 0
+                # Gemini 2.5: map levels to thinking_budget (0=off, -1=dynamic).
+                # Do not silently collapse minimal/low/medium to 0 (F7.8).
+                _GEMINI_25_BUDGETS = {
+                    "minimal": 512,
+                    "low": 1024,
+                    "medium": 8192,
+                    "high": -1,
+                }
+                level_key = str(thinking_level).lower()
+                if level_key in _GEMINI_25_BUDGETS:
+                    llm_kwargs["thinking_budget"] = _GEMINI_25_BUDGETS[level_key]
+                else:
+                    logger.warning(
+                        "Unsupported google_thinking_level %r for Gemini 2.5; "
+                        "expected one of %s. Leaving thinking_budget unset.",
+                        thinking_level,
+                        sorted(_GEMINI_25_BUDGETS),
+                    )
 
         return NormalizedChatGoogleGenerativeAI(**llm_kwargs)
 

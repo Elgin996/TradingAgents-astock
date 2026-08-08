@@ -1,9 +1,12 @@
 import os
+import logging
 import requests
 import pandas as pd
 import json
 from datetime import datetime
 from io import StringIO
+
+logger = logging.getLogger(__name__)
 
 API_BASE_URL = "https://www.alphavantage.co/query"
 
@@ -39,9 +42,11 @@ class AlphaVantageRateLimitError(Exception):
     """Exception raised when Alpha Vantage API rate limit is exceeded."""
     pass
 
-def _make_api_request(function_name: str, params: dict) -> dict | str:
+def _make_api_request(function_name: str, params: dict) -> str:
     """Helper function to make API requests and handle responses.
-    
+
+    Always returns the raw response body as text (JSON or CSV).
+
     Raises:
         AlphaVantageRateLimitError: When API rate limit is exceeded
     """
@@ -63,7 +68,7 @@ def _make_api_request(function_name: str, params: dict) -> dict | str:
         # Remove entitlement if it's None or empty
         api_params.pop("entitlement", None)
     
-    response = requests.get(API_BASE_URL, params=api_params)
+    response = requests.get(API_BASE_URL, params=api_params, timeout=15)
     response.raise_for_status()
 
     response_text = response.text
@@ -117,6 +122,7 @@ def _filter_csv_by_date_range(csv_data: str, start_date: str, end_date: str) -> 
         return filtered_df.to_csv(index=False)
 
     except Exception as e:
-        # If filtering fails, return original data with a warning
-        print(f"Warning: Failed to filter CSV data by date range: {e}")
-        return csv_data
+        # Fail closed — returning unfiltered data would silently widen the window
+        # past curr_date and introduce lookahead bias.
+        logger.warning("Failed to filter CSV data by date range: %s", e)
+        raise

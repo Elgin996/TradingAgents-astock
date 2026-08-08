@@ -135,12 +135,15 @@ def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker) -
             last_chunk = chunk
             _detect_completed_stages(chunk, tracker)
             _infer_active_stage(tracker)
-            record_incomplete_task(
-                ticker,
-                trade_date,
-                status="paused" if tracker.is_paused else "running",
-                completed_stages=tracker.completed_stages,
-            )
+            # Skip recording if stop was requested — sidebar may have already
+            # cleared the incomplete task; a late write would resurrect it (F6.6).
+            if not tracker.stop_requested:
+                record_incomplete_task(
+                    ticker,
+                    trade_date,
+                    status="paused" if tracker.is_paused else "running",
+                    completed_stages=list(tracker.completed_stages),
+                )
 
             s = stats.get_stats()
             tracker.update_stats(s["llm_calls"], s["tool_calls"], s["tokens_in"], s["tokens_out"])
@@ -181,7 +184,7 @@ def run_analysis_in_thread(
         ticker,
         trade_date,
         status="running",
-        completed_stages=tracker.completed_stages,
+        completed_stages=list(tracker.completed_stages),
     )
 
     def _target() -> None:
@@ -195,13 +198,14 @@ def run_analysis_in_thread(
                     traceback.print_exc()
                 return
             traceback.print_exc()
-            record_incomplete_task(
-                ticker,
-                trade_date,
-                status="error",
-                error=str(exc),
-                completed_stages=tracker.completed_stages,
-            )
+            if not tracker.stop_requested:
+                record_incomplete_task(
+                    ticker,
+                    trade_date,
+                    status="error",
+                    error=str(exc),
+                    completed_stages=list(tracker.completed_stages),
+                )
             tracker.mark_error(str(exc))
 
     t = threading.Thread(target=_target, daemon=True)

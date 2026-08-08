@@ -291,6 +291,9 @@ streamlit run web/app.py
 | `market_lookback_days` | `None` | 技术分析回溯天数（分析区间 = 起始日期 → 分析日期）。Web/CLI 由「数据起始日期」自动算出；`None` = 模型自选（约 30 天）。#16 |
 | `max_debate_rounds` | `1` | Bull vs Bear 辩论轮数 |
 | `max_risk_discuss_rounds` | `1` | 风险三方辩论轮数 |
+| `max_recur_limit` | `250` | LangGraph 步数预算（分析师 tool call 各占 2 步） |
+| `strict_point_in_time` | `False` | `True` 时 live-only 数据工具拒绝历史日期（回测防前视） |
+| `quality_gate_policy` | `"warn"` | 质量门控：`warn` 继续辩论并标记失败；`block` 提前结束图 |
 | `data_vendors` | 全部 `"a_stock"` | 数据供应商路由 |
 | `checkpoint_enabled` | `False` | 启用 SQLite 断点续跑 |
 | `memory_log_max_entries` | `None` | 交易记忆最大条目数 |

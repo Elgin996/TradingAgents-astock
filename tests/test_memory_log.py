@@ -1,5 +1,7 @@
 """Tests for TradingMemoryLog — storage, deferred reflection, PM injection, legacy removal."""
 
+from concurrent.futures import ThreadPoolExecutor
+
 import pytest
 import pandas as pd
 from unittest.mock import MagicMock, patch
@@ -33,8 +35,15 @@ DECISION_NO_RATING = (
 # Shared helpers
 # ---------------------------------------------------------------------------
 
-def make_log(tmp_path, filename="trading_memory.md"):
-    config = {"memory_log_path": str(tmp_path / filename)}
+def make_log(tmp_path, filename="trading_memory.md", **extra):
+    # Disable age-based pending expiry by default so fixtures that use fixed
+    # historical dates (e.g. 2026-01-*) are not wiped when "today" moves on.
+    # The dedicated F7.3 test opts back in explicitly.
+    config = {
+        "memory_log_path": str(tmp_path / filename),
+        "memory_pending_max_age_days": None,
+        **extra,
+    }
     return TradingMemoryLog(config)
 
 
@@ -59,6 +68,22 @@ def _resolve_entry(log, ticker, date, decision, reflection="Good call."):
 def _price_df(prices):
     """Minimal DataFrame matching yfinance .history() output shape."""
     return pd.DataFrame({"Close": prices})
+
+
+def _ohlcv_df(opens, closes, start="2026-01-05"):
+    """Minimal OHLCV frame matching _load_ohlcv_astock output (T+1 uses Open/Close)."""
+    n = len(closes)
+    dates = pd.bdate_range(start=start, periods=n)
+    return pd.DataFrame(
+        {
+            "Date": dates,
+            "Open": opens,
+            "High": closes,
+            "Low": opens,
+            "Close": closes,
+            "Volume": [1_000_000] * n,
+        }
+    )
 
 
 def _make_pm_state(past_context=""):
@@ -286,6 +311,28 @@ class TestTradingMemoryLogCore:
         assert "AAPL" not in ctx
         assert "META" in ctx
 
+    def test_get_past_context_before_date_excludes_future(self, tmp_path):
+        """Walk-forward: entries on/after trade_date must not leak into context."""
+        log = make_log(tmp_path)
+        _seed_completed(tmp_path, "NVDA", "2026-01-05", "Buy early.", "Past lesson.")
+        _seed_completed(tmp_path, "NVDA", "2026-01-20", "Buy later.", "Future lesson.")
+        ctx = log.get_past_context("NVDA", before_date="2026-01-15")
+        assert "Past lesson." in ctx
+        assert "Future lesson." not in ctx
+
+    def test_concurrent_store_decision_does_not_corrupt(self, tmp_path):
+        log = TradingMemoryLog({"memory_log_path": str(tmp_path / "m.md")})
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            list(
+                pool.map(
+                    lambda i: log.store_decision(
+                        f"60000{i}", "2026-05-12", f"Rating: Hold #{i}"
+                    ),
+                    range(8),
+                )
+            )
+        assert len(log.load_entries()) == 8
+
     # No-op when config is None
 
     def test_no_log_path_is_noop(self):
@@ -308,6 +355,7 @@ class TestTradingMemoryLogCore:
         log = TradingMemoryLog({
             "memory_log_path": str(tmp_path / "trading_memory.md"),
             "memory_log_max_entries": 3,
+            "memory_pending_max_age_days": None,
         })
         # Resolve 5 entries; rotation should keep only the 3 most recent.
         for i in range(5):
@@ -319,10 +367,12 @@ class TestTradingMemoryLogCore:
         assert dates == ["2026-01-03", "2026-01-04", "2026-01-05"]
 
     def test_rotation_never_prunes_pending(self, tmp_path):
-        """Pending entries (unresolved) are kept regardless of the cap."""
+        """Pending entries (unresolved) are kept regardless of the resolved-entry cap."""
         log = TradingMemoryLog({
             "memory_log_path": str(tmp_path / "trading_memory.md"),
             "memory_log_max_entries": 2,
+            # Disable age expiry so this test isolates the max_entries behaviour.
+            "memory_pending_max_age_days": None,
         })
         # 3 resolved + 2 pending. With cap=2, only 2 resolved survive; both pending stay.
         for i in range(3):
@@ -334,14 +384,34 @@ class TestTradingMemoryLogCore:
         entries = log.load_entries()
         pending = [e for e in entries if e["pending"]]
         resolved = [e for e in entries if not e["pending"]]
-        assert len(pending) == 2, "pending entries must never be pruned"
+        assert len(pending) == 2, "pending entries must never be pruned by max_entries"
         assert len(resolved) == 2, f"expected 2 resolved after rotation, got {len(resolved)}"
+
+    def test_pending_expired_by_age(self, tmp_path):
+        """Pending entries older than memory_pending_max_age_days are dropped (F7.3)."""
+        from datetime import date, timedelta
+
+        today = date.today()
+        old = (today - timedelta(days=120)).isoformat()
+        recent = (today - timedelta(days=10)).isoformat()
+        log = TradingMemoryLog({
+            "memory_log_path": str(tmp_path / "trading_memory.md"),
+            "memory_pending_max_age_days": 90,
+        })
+        log.store_decision("NVDA", old, DECISION_BUY)
+        log.store_decision("AAPL", recent, DECISION_BUY)
+        entries = log.load_entries()
+        pending = [e for e in entries if e["pending"]]
+        assert len(pending) == 1
+        assert pending[0]["ticker"] == "AAPL"
+        assert pending[0]["date"] == recent
 
     def test_rotation_under_cap_is_noop(self, tmp_path):
         """No rotation when resolved count <= max_entries."""
         log = TradingMemoryLog({
             "memory_log_path": str(tmp_path / "trading_memory.md"),
             "memory_log_max_entries": 10,
+            "memory_pending_max_age_days": None,
         })
         for i in range(3):
             _resolve_entry(log, "NVDA", f"2026-01-{i+1:02d}", DECISION_BUY, f"Lesson {i}.")
@@ -505,67 +575,109 @@ class TestDeferredReflection:
         assert "-5.0%" in human_content
         assert "Exit position immediately." in human_content
 
-    # TradingAgentsGraph._fetch_returns
+    # TradingAgentsGraph._fetch_returns (A-share loader, T+1 open entry)
 
     def test_fetch_returns_valid_ticker(self):
-        stock_prices = [100.0, 102.0, 104.0, 103.0, 105.0, 106.0]
-        bench_prices = [4000.0, 4020.0, 4040.0, 4030.0, 4050.0, 4060.0]
+        # trade_date=2026-01-05; T+1 entry is next session open; need holding_days+1 future bars
+        stock = _ohlcv_df(
+            opens=[100, 101, 102, 103, 104, 105, 106],
+            closes=[100.5, 101.5, 102.5, 103.5, 104.5, 105.5, 106.5],
+            start="2026-01-05",
+        )
+        bench = _ohlcv_df(
+            opens=[4000, 4010, 4020, 4030, 4040, 4050, 4060],
+            closes=[4005, 4015, 4025, 4035, 4045, 4055, 4065],
+            start="2026-01-05",
+        )
         mock_graph = MagicMock(spec=TradingAgentsGraph)
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            def _make_ticker(sym):
-                m = MagicMock()
-                m.history.return_value = _price_df(bench_prices if sym == "000300.SS" else stock_prices)
-                return m
-            mock_ticker_cls.side_effect = _make_ticker
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "688017", "2026-01-05")
+        mock_graph._load_csi300_ohlcv = MagicMock(return_value=bench)
+        mock_graph._t1_holding_return = TradingAgentsGraph._t1_holding_return
+        with patch(
+            "tradingagents.dataflows.a_stock._load_ohlcv_astock", return_value=stock
+        ):
+            raw, alpha, days = TradingAgentsGraph._fetch_returns(
+                mock_graph, "688017", "2026-01-05"
+            )
         assert raw is not None and alpha is not None and days is not None
         assert isinstance(raw, float) and isinstance(alpha, float) and isinstance(days, int)
         assert days == 5
 
-    def test_fetch_returns_uses_exchange_qualified_astock_symbol(self):
+    def test_fetch_returns_uses_astock_loader_not_yfinance(self):
+        stock = _ohlcv_df(
+            opens=[100, 101, 102, 103, 104, 105, 106],
+            closes=[100, 101, 102, 103, 104, 105, 106],
+        )
         mock_graph = MagicMock(spec=TradingAgentsGraph)
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            m = MagicMock()
-            m.history.return_value = _price_df([100.0, 101.0, 102.0, 103.0, 104.0, 105.0])
-            mock_ticker_cls.return_value = m
+        mock_graph._load_csi300_ohlcv = MagicMock(return_value=stock)
+        mock_graph._t1_holding_return = TradingAgentsGraph._t1_holding_return
+        with patch(
+            "tradingagents.dataflows.a_stock._load_ohlcv_astock", return_value=stock
+        ) as load:
             TradingAgentsGraph._fetch_returns(mock_graph, "600519", "2026-01-05")
-
-        assert mock_ticker_cls.call_args_list[0].args == ("600519.SS",)
+        assert load.call_args.args[0] == "600519"
 
     def test_fetch_returns_too_recent(self):
-        """Only 1 data point available → returns (None, None, None), no crash."""
+        """Insufficient post-trade bars → (None, None, None), no crash."""
+        stock = _ohlcv_df(opens=[100.0], closes=[100.0])
         mock_graph = MagicMock(spec=TradingAgentsGraph)
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            m = MagicMock()
-            m.history.return_value = _price_df([100.0])
-            mock_ticker_cls.return_value = m
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "NVDA", "2026-04-19")
+        mock_graph._load_csi300_ohlcv = MagicMock(return_value=stock)
+        mock_graph._t1_holding_return = TradingAgentsGraph._t1_holding_return
+        with patch(
+            "tradingagents.dataflows.a_stock._load_ohlcv_astock", return_value=stock
+        ):
+            raw, alpha, days = TradingAgentsGraph._fetch_returns(
+                mock_graph, "600519", "2026-01-05"
+            )
         assert raw is None and alpha is None and days is None
 
     def test_fetch_returns_delisted(self):
         """Empty DataFrame → returns (None, None, None), no crash."""
+        empty = pd.DataFrame(
+            columns=["Date", "Open", "High", "Low", "Close", "Volume"]
+        )
         mock_graph = MagicMock(spec=TradingAgentsGraph)
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            m = MagicMock()
-            m.history.return_value = pd.DataFrame({"Close": []})
-            mock_ticker_cls.return_value = m
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "XXXXXFAKE", "2026-01-10")
+        mock_graph._load_csi300_ohlcv = MagicMock(return_value=empty)
+        mock_graph._t1_holding_return = TradingAgentsGraph._t1_holding_return
+        with patch(
+            "tradingagents.dataflows.a_stock._load_ohlcv_astock", return_value=empty
+        ):
+            raw, alpha, days = TradingAgentsGraph._fetch_returns(
+                mock_graph, "XXXXXFAKE", "2026-01-10"
+            )
         assert raw is None and alpha is None and days is None
 
     def test_fetch_returns_benchmark_shorter_than_stock(self):
-        """CSI 300 having fewer rows than the stock must not raise IndexError."""
-        stock_prices = [100.0, 102.0, 104.0, 103.0, 105.0, 106.0]
-        bench_prices = [4000.0, 4020.0, 4030.0]
+        """CSI 300 having fewer usable bars must not raise; returns None if short."""
+        stock = _ohlcv_df(
+            opens=[100, 102, 104, 103, 105, 106, 107],
+            closes=[100, 102, 104, 103, 105, 106, 107],
+        )
+        # Only 3 bars after trade_date → cannot satisfy holding_days=5
+        bench = _ohlcv_df(
+            opens=[4000, 4020, 4030],
+            closes=[4000, 4020, 4030],
+        )
         mock_graph = MagicMock(spec=TradingAgentsGraph)
-        with patch("yfinance.Ticker") as mock_ticker_cls:
-            def _make_ticker(sym):
-                m = MagicMock()
-                m.history.return_value = _price_df(bench_prices if sym == "000300.SS" else stock_prices)
-                return m
-            mock_ticker_cls.side_effect = _make_ticker
-            raw, alpha, days = TradingAgentsGraph._fetch_returns(mock_graph, "688017", "2026-01-05")
-        assert raw is not None and alpha is not None and days is not None
-        assert days == 2
+        mock_graph._load_csi300_ohlcv = MagicMock(return_value=bench)
+        mock_graph._t1_holding_return = TradingAgentsGraph._t1_holding_return
+        with patch(
+            "tradingagents.dataflows.a_stock._load_ohlcv_astock", return_value=stock
+        ):
+            raw, alpha, days = TradingAgentsGraph._fetch_returns(
+                mock_graph, "688017", "2026-01-05"
+            )
+        assert raw is None and alpha is None and days is None
+
+    def test_t1_holding_return_uses_next_open(self):
+        df = _ohlcv_df(
+            opens=[10, 20, 30, 40, 50, 60, 70],
+            closes=[11, 21, 31, 41, 51, 61, 71],
+            start="2026-01-05",
+        )
+        # trade_date = first bar; entry = second open (20); exit close at +5 = 71
+        ret, days = TradingAgentsGraph._t1_holding_return(df, "2026-01-05", 5)
+        assert days == 5
+        assert ret == pytest.approx((71 - 20) / 20)
 
     # TradingAgentsGraph._resolve_pending_entries
 
@@ -663,15 +775,17 @@ class TestPortfolioManagerInjection:
 
     def test_pm_falls_back_to_freetext_when_structured_unavailable(self):
         """If a provider does not support with_structured_output, the agent
-        falls back to a plain invoke and returns whatever prose the model
-        produced, so the pipeline never blocks."""
+        falls back to a plain invoke. The free-text path is marked so CLI/web
+        can surface the degraded rating."""
+        from tradingagents.agents.utils.structured import FREETEXT_MARKER
+
         plain_response = "**Rating**: Sell\n\nExit ahead of guidance."
         llm = MagicMock()
         llm.with_structured_output.side_effect = NotImplementedError("provider unsupported")
         llm.invoke.return_value = MagicMock(content=plain_response)
         pm_node = create_portfolio_manager(llm)
         result = pm_node(_make_pm_state())
-        assert result["final_trade_decision"] == plain_response
+        assert result["final_trade_decision"] == f"{FREETEXT_MARKER}\n{plain_response}"
 
     # get_past_context ordering and limits
 
@@ -785,7 +899,10 @@ class TestLegacyRemoval:
             },
         }
         mock_graph = MagicMock()
-        mock_graph.memory_log = TradingMemoryLog({"memory_log_path": str(tmp_path / "mem.md")})
+        mock_graph.memory_log = TradingMemoryLog({
+            "memory_log_path": str(tmp_path / "mem.md"),
+            "memory_pending_max_age_days": None,
+        })
         mock_graph.log_states_dict = {}
         mock_graph.debug = False
         mock_graph._checkpointer_ctx = None

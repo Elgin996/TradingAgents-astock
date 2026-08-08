@@ -306,12 +306,14 @@ def render_sidebar() -> None:
     trade_date = st.date_input(
         "分析日期",
         value=date.today(),
+        max_value=date.today(),
         key="input_date",
     )
 
     start_date = st.date_input(
         "数据起始日期",
         value=trade_date.replace(day=1),   # 默认本月第一天
+        max_value=trade_date,
         key="input_start_date",
         help="技术分析回溯到该日期（默认本月第一天）。分析区间 = 起始日期 → 分析日期，"
              "用于「按月」或自定义时段分析；留默认即分析当月至今。",

@@ -10,7 +10,12 @@ import unittest
 
 import pytest
 
-from tradingagents.dataflows.a_stock import _get_prefix
+from tradingagents.dataflows.a_stock import (
+    _em_secid,
+    _fmt_yi,
+    _get_prefix,
+    _sina_symbol,
+)
 
 
 @pytest.mark.unit
@@ -39,6 +44,26 @@ class MarketPrefixRoutingTests(unittest.TestCase):
         """900xxx (Shanghai B shares) is the only leading-9 range that really is Shanghai."""
         self.assertEqual(_get_prefix("900901"), "sh")
         self.assertEqual(_get_prefix("900932"), "sh")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("code,secid,sina", [
+    ("600519", "1.600519", "sh600519"),
+    ("000001", "0.000001", "sz000001"),
+    ("300750", "0.300750", "sz300750"),
+    ("920819", "0.920819", "bj920819"),
+    ("832000", "0.832000", "bj832000"),
+])
+def test_market_routing(code, secid, sina):
+    assert _em_secid(code) == secid
+    assert _sina_symbol(code) == sina
+
+
+@pytest.mark.unit
+def test_fmt_yi_normalizes_raw_yuan():
+    assert _fmt_yi(1e8) == "1.00 亿元"
+    assert _fmt_yi(2.5e10) == "250.00 亿元"
+    assert _fmt_yi("not-a-number") == "N/A"
 
 
 if __name__ == "__main__":

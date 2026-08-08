@@ -7,8 +7,6 @@ import json
 from datetime import datetime, timedelta
 from typing import Dict, Any, Tuple, List, Optional
 
-import yfinance as yf
-
 logger = logging.getLogger(__name__)
 
 from langgraph.prebuilt import ToolNode
@@ -49,7 +47,7 @@ from tradingagents.agents.utils.agent_utils import (
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
-from .setup import GraphSetup
+from .setup import DEFAULT_ANALYSTS, GraphSetup
 from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
@@ -132,7 +130,7 @@ class TradingAgentsGraph:
 
     def __init__(
         self,
-        selected_analysts=["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"],
+        selected_analysts: Optional[List[str]] = None,
         debug=False,
         config: Dict[str, Any] = None,
         callbacks: Optional[List] = None,
@@ -145,6 +143,7 @@ class TradingAgentsGraph:
             config: Configuration dictionary. If None, uses default config
             callbacks: Optional list of callback handlers (e.g., for tracking LLM/tool stats)
         """
+        selected_analysts = list(selected_analysts or DEFAULT_ANALYSTS)
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
@@ -214,10 +213,13 @@ class TradingAgentsGraph:
                 # MiniMax 网关），否则同样是撞额度那一刻才炸。None ⇒ 该 provider
                 # 用自己的默认端点。
                 cross_provider = bool(_fb_provider) and _fb_provider != self.config["llm_provider"]
+                _fb_provider_resolved = _fb_provider or self.config["llm_provider"]
                 fallback_spec = {
-                    "provider": _fb_provider or self.config["llm_provider"],
+                    "provider": _fb_provider_resolved,
                     "model": _fb_model or self.config[fallback_model_key],
                     "base_url": None if cross_provider else self.config.get("backend_url"),
+                    # Merge tuning kwargs for the *fallback* provider (not primary).
+                    **self._get_provider_kwargs(_fb_provider_resolved),
                     # 带上 callbacks：降级意味着**开始计费**，此时统计/成本回调
                     # 反而看不到这些调用的话，恰好在花钱的时候统计是瞎的。
                     **({"callbacks": self.callbacks} if self.callbacks else {}),
@@ -250,6 +252,7 @@ class TradingAgentsGraph:
         self.conditional_logic = ConditionalLogic(
             max_debate_rounds=self.config["max_debate_rounds"],
             max_risk_discuss_rounds=self.config["max_risk_discuss_rounds"],
+            quality_gate_policy=self.config.get("quality_gate_policy", "warn"),
         )
         self.graph_setup = GraphSetup(
             self.quick_thinking_llm,
@@ -258,7 +261,9 @@ class TradingAgentsGraph:
             self.conditional_logic,
         )
 
-        self.propagator = Propagator()
+        self.propagator = Propagator(
+            max_recur_limit=self.config.get("max_recur_limit", 250)
+        )
         self.reflector = Reflector(self.quick_thinking_llm)
         self.signal_processor = SignalProcessor(self.quick_thinking_llm)
 
@@ -272,10 +277,18 @@ class TradingAgentsGraph:
         self.graph = self.workflow.compile()
         self._checkpointer_ctx = None
 
-    def _get_provider_kwargs(self) -> Dict[str, Any]:
-        """Get provider-specific kwargs for LLM client creation."""
+    def _get_provider_kwargs(self, provider: Optional[str] = None) -> Dict[str, Any]:
+        """Get provider-specific kwargs for LLM client creation.
+
+        When ``provider`` is given (e.g. the Agent SDK fallback), kwargs are
+        resolved for that provider rather than the primary ``llm_provider``.
+        """
         kwargs = {}
-        provider = self.config.get("llm_provider", "").lower()
+        provider = (provider or self.config.get("llm_provider", "")).lower()
+
+        timeout = self.config.get("llm_timeout")
+        if timeout is not None:
+            kwargs["timeout"] = timeout
 
         if provider == "google":
             thinking_level = self.config.get("google_thinking_level")
@@ -363,48 +376,106 @@ class TradingAgentsGraph:
             ),
         }
 
+    @staticmethod
+    def _t1_holding_return(ohlcv, trade_date: str, holding_days: int):
+        """Compute return with T+1 open entry and close exit ``holding_days`` later.
+
+        Returns ``(return, actual_days)`` or ``(None, None)`` when bars are insufficient.
+        """
+        import pandas as pd
+
+        if ohlcv is None or getattr(ohlcv, "empty", True):
+            return None, None
+        df = ohlcv.sort_values("Date").reset_index(drop=True)
+        trade_dt = pd.to_datetime(trade_date)
+        future = df[df["Date"] > trade_dt].reset_index(drop=True)
+        # Need entry bar + holding_days further bars for exit close.
+        if len(future) < holding_days + 1:
+            return None, None
+        entry = float(future.loc[0, "Open"])
+        if entry == 0:
+            return None, None
+        exit_px = float(future.loc[holding_days, "Close"])
+        return (exit_px - entry) / entry, holding_days
+
+    def _load_csi300_ohlcv(self, end_str: str):
+        """Load CSI 300 OHLCV via mootdx (999300) or Sina sh000300."""
+        import pandas as pd
+        from tradingagents.dataflows.a_stock import (
+            _load_ohlcv_astock,
+            _normalize_ohlcv_dates,
+            _requests,
+            _json,
+        )
+
+        try:
+            return _load_ohlcv_astock("999300", end_str)
+        except Exception as e:
+            logger.debug("mootdx CSI300 (999300) failed: %s; trying Sina sh000300", e)
+
+        url = (
+            "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+            "CN_MarketData.getKLineData"
+        )
+        params = {
+            "symbol": "sh000300",
+            "scale": "240",
+            "ma": "no",
+            "datalen": "800",
+        }
+        r = _requests.get(url, params=params, timeout=15)
+        r.raise_for_status()
+        data = _json.loads(r.text)
+        if not data:
+            return pd.DataFrame()
+        rows = [
+            {
+                "Date": item["day"],
+                "Open": float(item["open"]),
+                "High": float(item["high"]),
+                "Low": float(item["low"]),
+                "Close": float(item["close"]),
+                "Volume": int(item["volume"]),
+            }
+            for item in data
+        ]
+        df = _normalize_ohlcv_dates(pd.DataFrame(rows))
+        cutoff = pd.to_datetime(end_str)
+        return df[df["Date"] <= cutoff]
+
     def _fetch_returns(
         self, ticker: str, trade_date: str, holding_days: int = 5
     ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
         """Fetch raw and alpha return for ticker over holding_days from trade_date.
+
+        Uses the A-share OHLCV loader (mootdx/Sina), not yfinance. Entry is the
+        next session's open after ``trade_date`` (executable T+1), exit is that
+        session's close ``holding_days`` trading days later. Benchmark is CSI 300.
 
         Returns (raw_return, alpha_return, actual_holding_days) or
         (None, None, None) if price data is unavailable (too recent, delisted,
         or network error).
         """
         try:
+            from tradingagents.dataflows.a_stock import _load_ohlcv_astock
+
             start = datetime.strptime(trade_date, "%Y-%m-%d")
-            end = start + timedelta(days=holding_days + 7)  # buffer for weekends/holidays
+            end = start + timedelta(days=holding_days + 21)
             end_str = end.strftime("%Y-%m-%d")
 
-            yf_symbol = _normalize_yfinance_ticker(ticker)
-            if _is_unsupported_by_yfinance(yf_symbol):
-                # Say why instead of leaving a silent forever-pending entry.
-                logger.warning(
-                    "Cannot resolve outcome for %s: Yahoo Finance has no Beijing "
-                    "Stock Exchange coverage under any suffix, so this entry stays "
-                    "pending. Use a non-BSE ticker if you need memory reflection.",
-                    ticker,
-                )
+            stock = _load_ohlcv_astock(str(ticker), end_str)
+            benchmark = self._load_csi300_ohlcv(end_str)
+
+            raw, days = self._t1_holding_return(stock, trade_date, holding_days)
+            bench_ret, bench_days = self._t1_holding_return(
+                benchmark, trade_date, holding_days
+            )
+            if raw is None or bench_ret is None:
                 return None, None, None
 
-            stock = yf.Ticker(yf_symbol).history(start=trade_date, end=end_str)
-            benchmark = yf.Ticker("000300.SS").history(start=trade_date, end=end_str)
-
-            if len(stock) < 2 or len(benchmark) < 2:
-                return None, None, None
-
-            actual_days = min(holding_days, len(stock) - 1, len(benchmark) - 1)
-            raw = float(
-                (stock["Close"].iloc[actual_days] - stock["Close"].iloc[0])
-                / stock["Close"].iloc[0]
-            )
-            bench_ret = float(
-                (benchmark["Close"].iloc[actual_days] - benchmark["Close"].iloc[0])
-                / benchmark["Close"].iloc[0]
-            )
-            alpha = raw - bench_ret
-            return raw, alpha, actual_days
+            actual_days = min(days, bench_days)
+            alpha = float(raw) - float(bench_ret)
+            return float(raw), alpha, actual_days
         except Exception as e:
             logger.warning(
                 "Could not resolve outcome for %s on %s (will retry next run): %s",
@@ -510,7 +581,9 @@ class TradingAgentsGraph:
 
         # Initialize state only for fresh runs. Passing a new initial state to
         # LangGraph would start a new run and replay completed nodes.
-        past_context = self.memory_log.get_past_context(company_name)
+        past_context = self.memory_log.get_past_context(
+            company_name, before_date=str(trade_date)
+        )
         init_agent_state = self.propagator.create_initial_state(
             company_name, trade_date, past_context=past_context
         )
@@ -611,6 +684,10 @@ class TradingAgentsGraph:
         log_path = directory / f"full_states_log_{trade_date}.json"
         with open(log_path, "w", encoding="utf-8") as f:
             json.dump(self.log_states_dict[str(trade_date)], f, indent=4)
+
+        # Drop the in-memory copy after the per-date JSON is written — nothing
+        # else consumes log_states_dict, and it otherwise grows without bound (F7.4).
+        self.log_states_dict.pop(str(trade_date), None)
 
     def process_signal(self, full_signal):
         """Process a signal to extract the core decision."""

@@ -1,6 +1,6 @@
 # TradingAgents/graph/setup.py
 
-from typing import Any, Dict
+from typing import Any, Dict, Optional, Sequence
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode
 
@@ -8,6 +8,17 @@ from tradingagents.agents import *
 from tradingagents.agents.utils.agent_states import AgentState
 
 from .conditional_logic import ConditionalLogic
+
+# Single source of truth for the default analyst set (F7.2).
+DEFAULT_ANALYSTS: tuple[str, ...] = (
+    "market",
+    "social",
+    "news",
+    "fundamentals",
+    "policy",
+    "hot_money",
+    "lockup",
+)
 
 
 class GraphSetup:
@@ -27,7 +38,7 @@ class GraphSetup:
         self.conditional_logic = conditional_logic
 
     def setup_graph(
-        self, selected_analysts=["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"]
+        self, selected_analysts: Optional[Sequence[str]] = None
     ):
         """Set up and compile the agent workflow graph.
 
@@ -41,6 +52,7 @@ class GraphSetup:
                 - "hot_money": Hot money / capital flow tracker (A-stock specific)
                 - "lockup": Lockup expiry / reduction watcher (A-stock specific)
         """
+        selected_analysts = list(selected_analysts or DEFAULT_ANALYSTS)
         if len(selected_analysts) == 0:
             raise ValueError("Trading Agents Graph Setup Error: no analysts selected!")
 
@@ -98,8 +110,10 @@ class GraphSetup:
             delete_nodes["lockup"] = create_msg_delete()
             tool_nodes["lockup"] = self.tool_nodes["lockup"]
 
-        # Create quality gate node
-        quality_gate_node = create_quality_gate(self.quick_thinking_llm)
+        # Create quality gate node (only grade analysts that actually ran)
+        quality_gate_node = create_quality_gate(
+            self.quick_thinking_llm, selected_analysts=selected_analysts
+        )
 
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
@@ -161,7 +175,11 @@ class GraphSetup:
             else:
                 workflow.add_edge(current_clear, "Quality Gate")
 
-        workflow.add_edge("Quality Gate", "Bull Researcher")
+        workflow.add_conditional_edges(
+            "Quality Gate",
+            self.conditional_logic.should_continue_after_quality_gate,
+            {"Bull Researcher": "Bull Researcher", END: END},
+        )
 
         # Add remaining edges
         workflow.add_conditional_edges(

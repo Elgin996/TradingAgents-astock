@@ -164,7 +164,9 @@ class TestTraderAgent:
         llm.invoke.return_value = MagicMock(content=plain_response)
         trader = create_trader(llm)
         result = trader(_make_trader_state())
-        assert result["trader_investment_plan"] == plain_response
+        from tradingagents.agents.utils.structured import FREETEXT_MARKER, strip_freetext_marker
+        assert FREETEXT_MARKER in result["trader_investment_plan"]
+        assert strip_freetext_marker(result["trader_investment_plan"]) == plain_response
 
 
 # ---------------------------------------------------------------------------
@@ -236,4 +238,6 @@ class TestResearchManagerAgent:
         llm.invoke.return_value = MagicMock(content=plain_response)
         rm = create_research_manager(llm)
         result = rm(_make_rm_state())
-        assert result["investment_plan"] == plain_response
+        from tradingagents.agents.utils.structured import FREETEXT_MARKER, strip_freetext_marker
+        assert FREETEXT_MARKER in result["investment_plan"]
+        assert strip_freetext_marker(result["investment_plan"]) == plain_response

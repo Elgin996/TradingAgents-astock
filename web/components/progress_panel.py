@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import html
+
 import streamlit as st
 
 from web.progress import PIPELINE_STAGES, ProgressTracker
@@ -23,6 +25,7 @@ def _format_time(seconds: float) -> str:
 def render_progress(tracker: ProgressTracker) -> None:
     """Render the pipeline progress panel."""
 
+    safe_ticker = html.escape(str(tracker.ticker or ""))
     st.markdown(
         f"""
         <div style="text-align:center; margin:1rem 0 0.5rem;">
@@ -30,7 +33,7 @@ def render_progress(tracker: ProgressTracker) -> None:
                 分析进行中
             </span>
             <span style="font-size:1.1rem; color:#888; margin-left:0.8rem;">
-                {tracker.ticker}
+                {safe_ticker}
             </span>
         </div>
         """,

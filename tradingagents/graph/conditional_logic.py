@@ -1,15 +1,23 @@
 # TradingAgents/graph/conditional_logic.py
 
+from langgraph.graph import END
+
 from tradingagents.agents.utils.agent_states import AgentState
 
 
 class ConditionalLogic:
     """Handles conditional logic for determining graph flow."""
 
-    def __init__(self, max_debate_rounds=1, max_risk_discuss_rounds=1):
+    def __init__(
+        self,
+        max_debate_rounds=1,
+        max_risk_discuss_rounds=1,
+        quality_gate_policy: str = "warn",
+    ):
         """Initialize with configuration parameters."""
         self.max_debate_rounds = max_debate_rounds
         self.max_risk_discuss_rounds = max_risk_discuss_rounds
+        self.quality_gate_policy = quality_gate_policy
 
     def should_continue_market(self, state: AgentState):
         """Determine if market analysis should continue."""
@@ -66,6 +74,12 @@ class ConditionalLogic:
         if last_message.tool_calls:
             return "tools_lockup"
         return "Msg Clear Lockup"
+
+    def should_continue_after_quality_gate(self, state: AgentState) -> str:
+        """Halt the graph when quality gate failed and policy is block."""
+        if state.get("data_quality_failed") and self.quality_gate_policy == "block":
+            return END
+        return "Bull Researcher"
 
     def should_continue_debate(self, state: AgentState) -> str:
         """Determine if debate should continue."""

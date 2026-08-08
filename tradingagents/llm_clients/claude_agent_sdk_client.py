@@ -63,7 +63,16 @@ except Exception as exc:  # ImportError or any transitive import failure
     ClaudeAgentOptions = None
     create_sdk_mcp_server = None
     _sdk_tool = None
-    ClaudeSDKError = Exception  # placeholder so `except` clauses never NameError
+
+    class _MissingClaudeSDKError(Exception):
+        """Stand-in so ``except ClaudeSDKError`` is valid when the SDK is absent.
+
+        Must NOT be bare ``Exception`` — that would put ``Exception`` in
+        ``_FALLBACK_ERRORS`` and make ``issubclass(_AuthError, _FALLBACK_ERRORS)``
+        true, defeating the auth-must-not-bill guard.
+        """
+
+    ClaudeSDKError = _MissingClaudeSDKError
     _IMPORT_ERROR = exc
 
 
@@ -75,6 +84,16 @@ _AUTH_MARKERS = (
     "invalid api key",
     "please run /login",
 )
+
+# Broader hints for exception / string classification (not for ordinary assistant text).
+_AUTH_HINTS = (
+    "oauth", "unauthorized", "401", "authentication", "authenticate",
+    "invalid api key", "not logged in", "please log in", "setup-token",
+    "credentials", "expired token", "authentication_failed",
+    "oauth access token has expired", "re-authenticate", "please run /login",
+)
+
+_DEFAULT_SDK_TIMEOUT = int(os.environ.get("CLAUDE_AGENT_SDK_TIMEOUT", "600"))
 
 
 def _looks_like_auth_failure(message: Any) -> bool:
@@ -107,17 +126,36 @@ def _looks_like_auth_failure(message: Any) -> bool:
     return any(m in blob for m in _AUTH_MARKERS)
 
 
+def _exc_looks_like_auth(exc_or_msg: Any) -> bool:
+    """True when exception/string content indicates a subscription auth failure."""
+    return any(h in str(exc_or_msg).lower() for h in _AUTH_HINTS)
+
+
 def _auth_failure_hint(message: Any) -> str:
     detail = ""
-    content = getattr(message, "content", None)
-    if isinstance(content, list):
-        detail = " ".join(
-            getattr(b, "text", "") for b in content if getattr(b, "text", "")
-        ).strip()
-    if not detail:
-        data = getattr(message, "data", None)
-        if isinstance(data, dict):
-            detail = str(data.get("error") or data.get("error_status") or "")
+    if isinstance(message, BaseException) or isinstance(message, str):
+        detail = str(message).strip()
+    else:
+        content = getattr(message, "content", None)
+        if isinstance(content, list):
+            detail = " ".join(
+                getattr(b, "text", "") for b in content if getattr(b, "text", "")
+            ).strip()
+        if not detail:
+            data = getattr(message, "data", None)
+            if isinstance(data, dict):
+                detail = str(data.get("error") or data.get("error_status") or "")
+        if not detail:
+            # ResultMessage / opaque SDK objects — surface useful fields.
+            parts = [
+                getattr(message, "stop_reason", None),
+                getattr(message, "subtype", None),
+                getattr(message, "result", None),
+                getattr(message, "api_error_status", None),
+            ]
+            detail = " ".join(str(p) for p in parts if p is not None).strip()
+        if not detail:
+            detail = str(message).strip()
     return (
         "Claude 订阅凭据失效，无法走订阅额度"
         + (f"（{detail}）" if detail else "")
@@ -127,6 +165,17 @@ def _auth_failure_hint(message: Any) -> str:
         "把输出的 token 设为 CLAUDE_CODE_OAUTH_TOKEN；或直接 `claude` 重新登录。\n"
         "若确实想用按量计费的 Anthropic API，请把 provider 改回 anthropic。"
     )
+
+
+def _fallback_or_raise(exc, get_fallback, retry, desc):
+    """Single decision point for 'should this failure start paid billing?'"""
+    if isinstance(exc, _AuthError) or _exc_looks_like_auth(exc):
+        raise _AuthError(_auth_failure_hint(exc)) from exc
+    fallback = get_fallback()
+    if fallback is None:
+        raise exc
+    logger.warning("claude_agent_sdk: %s; falling back to provider '%s'", exc, desc)
+    return retry(fallback)
 
 
 class _RateLimitHit(Exception):
@@ -204,29 +253,70 @@ def _split_prompt(prompt: Any):
     return system, "\n".join(p for p in other_parts if p)
 
 
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-
-
 def _extract_json(text: str) -> str:
-    """Best-effort: pull the first {...} block out of a text response."""
-    match = _JSON_RE.search(text or "")
-    if not match:
-        raise ValueError("no JSON object found in Agent SDK text response")
-    return match.group(0)
+    """Pull a parseable {...} object from text via balanced-brace scan.
+
+    Prefers the last valid candidate (models often restate the final answer
+    at the end). Does not handle braces inside string literals; ``json.loads``
+    validates each candidate before it is returned.
+    """
+    candidates, depth, start = [], 0, None
+    for i, ch in enumerate(text or ""):
+        if ch == "{":
+            if depth == 0:
+                start = i
+            depth += 1
+        elif ch == "}" and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                candidates.append(text[start:i + 1])
+    for candidate in reversed(candidates):
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            continue
+    raise ValueError("no parseable JSON object found in Agent SDK text response")
 
 
-def _run_async(coro):
+def _run_async(coro, timeout: Optional[float] = None):
     """Run an async coroutine to completion from a synchronous caller.
 
     ``trading_graph`` drives LangGraph synchronously, so normally there is no
     running loop and ``asyncio.run`` works. If a loop is already running, run
     the coroutine on a dedicated thread with its own loop so we never disturb
     the caller's loop.
+
+    When a loop is already running, the worker thread is joined with a timeout
+    (default ``_DEFAULT_SDK_TIMEOUT`` / ``CLAUDE_AGENT_SDK_TIMEOUT``) so a hung
+    ``claude`` CLI cannot wedge the graph forever.
     """
+    if timeout is None:
+        timeout = float(_DEFAULT_SDK_TIMEOUT)
+
     try:
         asyncio.get_running_loop()
     except RuntimeError:
-        return asyncio.run(coro)
+        # No running loop — still bound the wait so a hung CLI cannot block forever.
+        box: dict[str, Any] = {}
+
+        def _worker_no_loop():
+            try:
+                box["value"] = asyncio.run(coro)
+            except BaseException as exc:
+                box["error"] = exc
+
+        thread = threading.Thread(target=_worker_no_loop, daemon=True)
+        thread.start()
+        thread.join(timeout)
+        if thread.is_alive():
+            raise _SDKResultError(
+                f"Agent SDK call exceeded {timeout}s. The `claude` CLI subprocess "
+                f"may be hung; check for orphaned processes."
+            )
+        if "error" in box:
+            raise box["error"]
+        return box["value"]
 
     box: dict[str, Any] = {}
 
@@ -236,9 +326,14 @@ def _run_async(coro):
         except BaseException as exc:  # propagate to the calling thread, don't swallow
             box["error"] = exc
 
-    thread = threading.Thread(target=_worker)
+    thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
-    thread.join()
+    thread.join(timeout)
+    if thread.is_alive():
+        raise _SDKResultError(
+            f"Agent SDK call exceeded {timeout}s. The `claude` CLI subprocess "
+            f"may be hung; check for orphaned processes."
+        )
     if "error" in box:
         raise box["error"]
     return box["value"]
@@ -288,15 +383,14 @@ class _StructuredAgentSDK:
         try:
             return self._adapter._client._invoke_structured(self._schema, prompt)
         except _FALLBACK_ERRORS as exc:
-            fallback = self._adapter._get_fallback()
-            if fallback is None:
-                raise
-            logger.warning(
-                "claude_agent_sdk: structured call failed (%s); "
-                "falling back to provider '%s'",
-                exc, self._adapter._fallback_desc(),
+            return _fallback_or_raise(
+                exc,
+                self._adapter._get_fallback,
+                lambda fb: fb.with_structured_output(self._schema).invoke(
+                    prompt, *args, **kwargs
+                ),
+                self._adapter._fallback_desc(),
             )
-            return fallback.with_structured_output(self._schema).invoke(prompt, *args, **kwargs)
 
 
 class _BoundAgentSDK(Runnable):
@@ -317,15 +411,12 @@ class _BoundAgentSDK(Runnable):
         try:
             return self._adapter._client._invoke_with_tools(self._tools, input)
         except _FALLBACK_ERRORS as exc:
-            fallback = self._adapter._get_fallback()
-            if fallback is None:
-                raise
-            logger.warning(
-                "claude_agent_sdk: tool invoke failed (%s); "
-                "falling back to provider '%s'",
-                exc, self._adapter._fallback_desc(),
+            return _fallback_or_raise(
+                exc,
+                self._adapter._get_fallback,
+                lambda fb: fb.bind_tools(self._tools).invoke(input, config, **kwargs),
+                self._adapter._fallback_desc(),
             )
-            return fallback.bind_tools(self._tools).invoke(input, config, **kwargs)
 
 
 class AgentSDKChatModel:
@@ -357,14 +448,12 @@ class AgentSDKChatModel:
         try:
             return self._client._invoke_raw(prompt)
         except _FALLBACK_ERRORS as exc:
-            fallback = self._get_fallback()
-            if fallback is None:
-                raise
-            logger.warning(
-                "claude_agent_sdk: invoke failed (%s); falling back to provider '%s'",
-                exc, self._fallback_desc(),
+            return _fallback_or_raise(
+                exc,
+                self._get_fallback,
+                lambda fb: fb.invoke(prompt, *args, **kwargs),
+                self._fallback_desc(),
             )
-            return fallback.invoke(prompt, *args, **kwargs)
 
     def with_structured_output(self, schema, **kwargs):
         return _StructuredAgentSDK(self, schema)
@@ -519,11 +608,25 @@ class ClaudeAgentSDKClient(BaseLLMClient):
         if result_msg is not None:
             if getattr(result_msg, "is_error", False):
                 # 401 也可能只出现在 ResultMessage 上（没有 api_retry 事件、
-                # 也没有合成助手文本）。这条必须先于下面的通用分支判：
+                # 也没有合成助手文本）。OAuth 过期有时带误导性 subtype、无 status。
+                # 扫 stop_reason / subtype / result / api_error_status 全文。
                 # _SDKResultError 在 _FALLBACK_ERRORS 里，漏判就会静默降级到
                 # 按 token 计费的 provider——正好违背「不产生 API 账单」的承诺。
                 status = getattr(result_msg, "api_error_status", None)
-                if status == 401 or str(status) == "401":
+                auth_blob = " ".join(
+                    str(p) for p in (
+                        getattr(result_msg, "stop_reason", None),
+                        getattr(result_msg, "subtype", None),
+                        getattr(result_msg, "result", None),
+                        status,
+                    ) if p is not None
+                )
+                if (
+                    status == 401
+                    or str(status) == "401"
+                    or _looks_like_auth_failure(result_msg)
+                    or _exc_looks_like_auth(auth_blob)
+                ):
                     raise _AuthError(_auth_failure_hint(result_msg))
                 raise _SDKResultError(
                     f"stop_reason={getattr(result_msg, 'stop_reason', None)} "
@@ -539,10 +642,17 @@ class ClaudeAgentSDKClient(BaseLLMClient):
                 text = final
         return text, structured
 
+    def _sdk_timeout(self) -> float:
+        raw = self.kwargs.get("timeout", _DEFAULT_SDK_TIMEOUT)
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return float(_DEFAULT_SDK_TIMEOUT)
+
     def _invoke_raw(self, prompt: Any) -> AIMessage:
         system_prompt, user_text = _split_prompt(prompt)
         options = self._build_options(system_prompt)
-        text, _ = _run_async(self._query(user_text, options))
+        text, _ = _run_async(self._query(user_text, options), timeout=self._sdk_timeout())
         return AIMessage(content=text)
 
     def _invoke_with_tools(self, lc_tools, prompt: Any) -> AIMessage:
@@ -554,13 +664,18 @@ class ClaudeAgentSDKClient(BaseLLMClient):
         options = self._build_options(
             system_prompt, sdk_tools=sdk_tools, tool_names=tool_names
         )
-        text, _ = _run_async(self._query(user_text, options, prefer_result=True))
+        text, _ = _run_async(
+            self._query(user_text, options, prefer_result=True),
+            timeout=self._sdk_timeout(),
+        )
         return AIMessage(content=text)
 
     def _invoke_structured(self, schema, prompt: Any):
         system_prompt, user_text = _split_prompt(prompt)
         output_format = {"type": "json_schema", "schema": schema.model_json_schema()}
         options = self._build_options(system_prompt, output_format=output_format)
-        text, structured = _run_async(self._query(user_text, options))
+        text, structured = _run_async(
+            self._query(user_text, options), timeout=self._sdk_timeout()
+        )
         data = structured if structured is not None else json.loads(_extract_json(text))
         return schema.model_validate(data)

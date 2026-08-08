@@ -46,7 +46,28 @@ def _client_with_query(monkeypatch, text="", structured=None, fallback_spec=None
         return text, structured
 
     monkeypatch.setattr(client, "_query", fake_query)
+    # `_build_options` constructs ClaudeAgentOptions — skip the real SDK type
+    # so these unit tests run without the optional [agentsdk] extra.
+    monkeypatch.setattr(
+        client, "_build_options",
+        lambda *a, **k: type("Opts", (), {"env": {}})(),
+    )
+    # Tool bridging also needs the SDK decorator; stub it for bind_tools tests.
+    monkeypatch.setattr(
+        mod, "_sdk_tools_from_langchain",
+        lambda tools: [],
+    )
     return client
+
+
+def _adapter(client):
+    """Build the chat adapter without ``get_llm()``'s import guard.
+
+    Unit tests mock ``_query`` / ``_invoke_raw`` and never need the real SDK
+    package; constructing ``AgentSDKChatModel`` directly keeps CI green when
+    the optional ``[agentsdk]`` extra is not installed.
+    """
+    return AgentSDKChatModel(client, client.fallback_spec)
 
 
 class _FakeLangChainTool:
@@ -66,8 +87,7 @@ class _FakeLangChainTool:
 
 def test_invoke_returns_aimessage(monkeypatch, oauth_env):
     client = _client_with_query(monkeypatch, text="hello from max")
-    llm = client.get_llm()
-    result = llm.invoke("say hi")
+    result = _adapter(client).invoke("say hi")
     assert result.content == "hello from max"
 
 
@@ -75,8 +95,7 @@ def test_structured_output_returns_pydantic(monkeypatch, oauth_env):
     client = _client_with_query(
         monkeypatch, structured={"decision": "buy", "confidence": 4}
     )
-    llm = client.get_llm()
-    plan = llm.with_structured_output(_Plan).invoke("decide")
+    plan = _adapter(client).with_structured_output(_Plan).invoke("decide")
     assert isinstance(plan, _Plan)
     assert plan.decision == "buy" and plan.confidence == 4
 
@@ -85,7 +104,7 @@ def test_structured_output_parses_json_text_when_no_structured_field(monkeypatch
     # SDK returned text (not structured_output) — adapter must parse the JSON.
     text = 'noise before {"decision": "hold", "confidence": 2} noise after'
     client = _client_with_query(monkeypatch, text=text, structured=None)
-    plan = client.get_llm().with_structured_output(_Plan).invoke("decide")
+    plan = _adapter(client).with_structured_output(_Plan).invoke("decide")
     assert plan.decision == "hold" and plan.confidence == 2
 
 
@@ -96,7 +115,7 @@ def test_bind_tools_returns_runnable_and_final_report(monkeypatch, oauth_env):
     from langchain_core.runnables import Runnable
 
     client = _client_with_query(monkeypatch, text="final report")
-    bound = client.get_llm().bind_tools([_FakeLangChainTool()])
+    bound = _adapter(client).bind_tools([_FakeLangChainTool()])
     assert isinstance(bound, Runnable)
     result = bound.invoke("analyze 600519")
     assert result.content == "final report"
@@ -115,9 +134,11 @@ def test_bind_tools_falls_back_on_rate_limit(monkeypatch, oauth_env):
         raise _RateLimitHit("weekly limit reached")
 
     monkeypatch.setattr(client, "_query", boom)
+    monkeypatch.setattr(client, "_build_options", lambda *a, **k: type("Opts", (), {})())
+    monkeypatch.setattr(mod, "_sdk_tools_from_langchain", lambda tools: [])
     _install_stub_fallback(monkeypatch)
 
-    result = client.get_llm().bind_tools([_FakeLangChainTool()]).invoke("analyze")
+    result = _adapter(client).bind_tools([_FakeLangChainTool()]).invoke("analyze")
     assert result.content == "served by fallback tools"
 
 
@@ -200,13 +221,14 @@ def test_invoke_falls_back_on_rate_limit(monkeypatch, oauth_env):
         fallback_spec={"provider": "deepseek", "model": "deepseek-v4-pro", "base_url": None},
     )
 
-    async def boom(prompt, options):
+    async def boom(prompt, options, prefer_result=False):
         raise _RateLimitHit("weekly limit reached")
 
     monkeypatch.setattr(client, "_query", boom)
+    monkeypatch.setattr(client, "_build_options", lambda *a, **k: type("Opts", (), {})())
     _install_stub_fallback(monkeypatch)
 
-    result = client.get_llm().invoke("analyze")
+    result = _adapter(client).invoke("analyze")
     assert result.content == "served by fallback"
 
 
@@ -216,13 +238,14 @@ def test_structured_falls_back_and_still_yields_pydantic(monkeypatch, oauth_env)
         fallback_spec={"provider": "deepseek", "model": "deepseek-v4-pro", "base_url": None},
     )
 
-    async def boom(prompt, options):
+    async def boom(prompt, options, prefer_result=False):
         raise _RateLimitHit("weekly limit reached")
 
     monkeypatch.setattr(client, "_query", boom)
+    monkeypatch.setattr(client, "_build_options", lambda *a, **k: type("Opts", (), {})())
     _install_stub_fallback(monkeypatch)
 
-    plan = client.get_llm().with_structured_output(_Plan).invoke("decide")
+    plan = _adapter(client).with_structured_output(_Plan).invoke("decide")
     assert isinstance(plan, _Plan)
     assert plan.decision == "fallback-buy"
 
@@ -230,12 +253,13 @@ def test_structured_falls_back_and_still_yields_pydantic(monkeypatch, oauth_env)
 def test_no_fallback_spec_reraises(monkeypatch, oauth_env):
     client = ClaudeAgentSDKClient("claude-opus-4-8", fallback_spec=None)
 
-    async def boom(prompt, options):
+    async def boom(prompt, options, prefer_result=False):
         raise _RateLimitHit("limit")
 
     monkeypatch.setattr(client, "_query", boom)
+    monkeypatch.setattr(client, "_build_options", lambda *a, **k: type("Opts", (), {})())
     with pytest.raises(_RateLimitHit):
-        client.get_llm().invoke("x")
+        _adapter(client).invoke("x")
 
 
 # --------------------------------------------------------------------------- #
@@ -514,6 +538,8 @@ def test_auth_detection_ignores_ordinary_assistant_text():
 def test_sdk_subprocess_env_blanks_anthropic_api_key(monkeypatch):
     """ANTHROPIC_API_KEY 必须在子进程被置空（否则悄悄走 API 计费），
     但父进程要保留它，好让 anthropic 仍能作为降级 provider。"""
+    if mod.ClaudeAgentOptions is None:
+        pytest.skip("claude-agent-sdk not installed")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-should-not-leak")
     from tradingagents.llm_clients.claude_agent_sdk_client import ClaudeAgentSDKClient
 
@@ -599,3 +625,108 @@ def test_tuple_messages_are_not_silently_emptied():
     system, user = _split_prompt([("system", "SYS"), ("human", "USER")])
     assert system == "SYS"
     assert "USER" in user
+
+
+# --------------------------------------------------------------------------- #
+# F2.1 — auth-flavoured ClaudeSDKError must NOT start paid billing
+# --------------------------------------------------------------------------- #
+
+def test_clientsdkerror_with_auth_text_does_not_fall_back(monkeypatch, oauth_env):
+    """ClaudeSDKError is the SDK base class — auth failures raise it too.
+    Content classification must stop them from constructing the paid fallback."""
+    client = ClaudeAgentSDKClient(
+        "claude-opus-4-8",
+        fallback_spec={"provider": "deepseek", "model": "deepseek-v4-pro", "base_url": None},
+    )
+
+    def boom(prompt):
+        # Raise from _invoke_raw so we do not need ClaudeAgentOptions (SDK may
+        # be absent in CI). ClaudeSDKError is in _FALLBACK_ERRORS — the gate
+        # must still refuse to start paid billing when the text is auth-flavoured.
+        raise mod.ClaudeSDKError("OAuth token expired — please re-authenticate")
+
+    monkeypatch.setattr(client, "_invoke_raw", boom)
+    _install_stub_fallback(monkeypatch)
+
+    # Bypass get_llm()'s import guard — the auth gate lives on the adapter.
+    llm = AgentSDKChatModel(client, client.fallback_spec)
+    with pytest.raises(mod._AuthError):
+        llm.invoke("hi")
+    assert llm._fallback_llm is None  # fallback never constructed
+
+
+def test_result_message_auth_error_without_401_does_not_fall_back(monkeypatch, oauth_env):
+    """OAuth expiry can arrive as is_error ResultMessage with no api_error_status."""
+    if mod._sdk is None:
+        # Without the real SDK types, exercise the same classification path
+        # that _query uses for ResultMessage fields.
+        class _Result:
+            is_error = True
+            api_error_status = None
+            stop_reason = "error"
+            subtype = "error"
+            result = "OAuth access token has expired. Please run /login."
+            content = []
+            error = None
+            model = None
+
+        auth_blob = " ".join(
+            str(p) for p in (
+                _Result.stop_reason, _Result.subtype, _Result.result, _Result.api_error_status,
+            ) if p is not None
+        )
+        assert mod._exc_looks_like_auth(auth_blob)
+        with pytest.raises(mod._AuthError):
+            raise mod._AuthError(mod._auth_failure_hint(_Result()))
+        return
+
+    _patch_query(
+        monkeypatch,
+        _fake(
+            mod._sdk.ResultMessage,
+            is_error=True,
+            structured_output=None,
+            result="OAuth access token has expired. Please run /login.",
+            stop_reason="error",
+            api_error_status=None,
+            subtype="error",
+        ),
+    )
+    client = ClaudeAgentSDKClient(
+        "claude-opus-4-8",
+        fallback_spec={"provider": "deepseek", "model": "deepseek-v4-pro", "base_url": None},
+    )
+    _install_stub_fallback(monkeypatch)
+    llm = AgentSDKChatModel(client, client.fallback_spec)
+    with pytest.raises(mod._AuthError):
+        llm.invoke("analyze")
+    assert llm._fallback_llm is None
+
+
+def test_generic_sdk_error_still_falls_back(monkeypatch, oauth_env):
+    """Guard against over-correcting: non-auth SDK faults must still fall back."""
+    client = ClaudeAgentSDKClient(
+        "claude-opus-4-8",
+        fallback_spec={"provider": "deepseek", "model": "deepseek-v4-pro", "base_url": None},
+    )
+
+    def boom(prompt):
+        raise mod._SDKResultError("connection reset by peer")
+
+    monkeypatch.setattr(client, "_invoke_raw", boom)
+    _install_stub_fallback(monkeypatch)
+
+    result = AgentSDKChatModel(client, client.fallback_spec).invoke("analyze")
+    assert result.content == "served by fallback"
+
+
+def test_extract_json_prefers_last_parseable_candidate():
+    """F5.6 — greedy \{.*\} breaks when prose contains an example schema."""
+    text = (
+        'Here is an example: {"decision": "buy", "confidence": "bad"}\n'
+        'Final answer: {"decision": "hold", "confidence": 2}'
+    )
+    # First object has non-int confidence → invalid for our schema, but both
+    # parse as JSON; balanced scan must return the *last* valid object.
+    extracted = mod._extract_json(text)
+    assert json.loads(extracted) == {"decision": "hold", "confidence": 2}

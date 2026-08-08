@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import html
+import json
 import re
 from typing import Any
 
 import streamlit as st
 
+from tradingagents.agents.utils.structured import has_freetext_marker
 from web.pdf_export import generate_markdown, generate_pdf
 from web.stock_display import normalize_stock_mentions, stock_display_label
 
@@ -45,6 +49,18 @@ def _display_report_text(text: Any, ticker: str, final_state: dict[str, Any]) ->
     return normalize_stock_mentions(cleaned, ticker, final_state)
 
 
+def _state_digest(final_state: dict[str, Any]) -> str:
+    payload = json.dumps(final_state, sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+@st.cache_data(show_spinner=False, max_entries=8)
+def _cached_pdf(state_digest: str, ticker: str, trade_date: str, signal: str, state_json: str) -> bytes:
+    """Cache PDF bytes keyed on a stable digest of the final state (F6.7)."""
+    del state_digest  # hash key only; content comes from state_json
+    return generate_pdf(json.loads(state_json), ticker, trade_date, signal)
+
+
 def render_report(
     final_state: dict[str, Any],
     ticker: str,
@@ -56,6 +72,9 @@ def render_report(
 
     color, cn_signal = _signal_style(signal)
     ticker_label = stock_display_label(ticker, final_state)
+    safe_ticker_label = html.escape(ticker_label)
+    safe_trade_date = html.escape(str(trade_date))
+    safe_signal = html.escape(str(signal).upper())
 
     stats_html = ""
     if elapsed is not None:
@@ -74,10 +93,10 @@ def render_report(
         ">
             <div style="font-size:0.9rem; color:#888; letter-spacing:2px;">TRADING SIGNAL</div>
             <div style="font-size:3.5rem; font-weight:900; color:{color}; margin:0.3rem 0;">
-                {signal.upper()}
+                {safe_signal}
             </div>
             <div style="font-size:1.2rem; color:#f5f1eb;">
-                {ticker_label} · {trade_date}
+                {safe_ticker_label} · {safe_trade_date}
             </div>
             {stats_html}
         </div>
@@ -86,6 +105,17 @@ def render_report(
     )
 
     st.caption("⚠️ 本报告由 AI 自动生成，仅供学习研究，不构成投资建议。")
+
+    for key in (
+        "final_trade_decision",
+        "investment_plan",
+        "trader_investment_plan",
+    ):
+        if has_freetext_marker(final_state.get(key, "") or ""):
+            st.warning(
+                "本次决策未通过结构化校验，评级为启发式解析，可能不准确"
+            )
+            break
 
     # Markdown export always works (no font dependency); PDF is generated
     # lazily and guarded so a PDF/font failure never crashes the results page.
@@ -101,7 +131,9 @@ def render_report(
         )
     with col_pdf:
         try:
-            pdf_bytes = generate_pdf(final_state, ticker, trade_date, signal)
+            digest = _state_digest(final_state)
+            state_json = json.dumps(final_state, default=str, ensure_ascii=False)
+            pdf_bytes = _cached_pdf(digest, ticker, trade_date, signal, state_json)
             st.download_button(
                 "📄 下载 PDF",
                 data=pdf_bytes,

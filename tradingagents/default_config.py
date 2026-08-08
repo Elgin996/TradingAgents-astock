@@ -9,12 +9,18 @@ DEFAULT_CONFIG = {
     "memory_log_path": os.getenv("TRADINGAGENTS_MEMORY_LOG_PATH", os.path.join(_TRADINGAGENTS_HOME, "memory", "trading_memory.md")),
     # Optional cap on the number of resolved memory log entries. When set,
     # the oldest resolved entries are pruned once this limit is exceeded.
-    # Pending entries are never pruned. None disables rotation entirely.
+    # Pending entries are not counted toward this cap. None disables rotation.
     "memory_log_max_entries": None,
-    # LLM settings
-    "llm_provider": "openai",
-    "deep_think_llm": "gpt-5.4",
-    "quick_think_llm": "gpt-5.4-mini",
+    # Drop pending memory entries older than this many days (unresolvable
+    # tickers otherwise accumulate forever). None disables age-based expiry.
+    "memory_pending_max_age_days": 90,
+    # LLM settings — defaults match README「推荐，国内直连」MiniMax section.
+    "llm_provider": "minimax",
+    "deep_think_llm": "MiniMax-M2.7",
+    "quick_think_llm": "MiniMax-M2.7-highspeed",
+    # Bound worst-case blocking LLM calls (seconds). Passed through to clients
+    # that accept a ``timeout`` kwarg. None leaves the client default.
+    "llm_timeout": 120,
     # When None, each provider's client falls back to its own default endpoint
     # (api.openai.com for OpenAI, generativelanguage.googleapis.com for Gemini, ...).
     # The CLI overrides this per provider when the user picks one. Keeping a
@@ -60,7 +66,19 @@ DEFAULT_CONFIG = {
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
-    "max_recur_limit": 100,
+    # LangGraph step budget. Each analyst tool call costs 2 steps (analyst → tools →
+    # analyst); 7 analysts requesting ~8 indicators each plus the gate, debates, trader,
+    # risk trio and PM reaches ~135 in the worst case. 250 leaves headroom without
+    # masking a genuine loop.
+    "max_recur_limit": 250,
+    # When True, tools in a_stock.LIVE_ONLY_TOOLS refuse to answer for past dates
+    # instead of silently returning a current snapshot. Off by default because it
+    # degrades same-day analysis quality; turn it on for any backtest or research
+    # run where lookahead bias would invalidate the result.
+    "strict_point_in_time": False,
+    # Quality gate policy after analysts finish: "warn" (default) continues into
+    # debate with data_quality_failed flagged; "block" ends the graph early.
+    "quality_gate_policy": "warn",
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {

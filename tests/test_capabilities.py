@@ -145,5 +145,6 @@ def test_optional_tool_call_returning_none_still_falls_back_to_free_text():
 
     out = invoke_structured_or_freetext(structured, plain, "p", render, "Trader")
 
-    assert out == "free text fallback"
+    from tradingagents.agents.utils.structured import FREETEXT_MARKER
+    assert out == f"{FREETEXT_MARKER}\nfree text fallback"
     plain.invoke.assert_called_once()

@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Optional
 
 REPORT_FIELDS = {
     "market": "market_report",
@@ -64,23 +64,37 @@ def _hard_check_report(analyst_type: str, report: str) -> tuple:
     return ("A", f"完整 ({length} chars)")
 
 
+def _fail_threshold(n_fields: int) -> int:
+    """Scaled skip/block threshold for the number of analysts actually graded."""
+    return max(2, n_fields // 2 + 1)
+
+
 def _build_review_prompt(
-    reports: dict, trade_date: str, ticker: str
+    reports: dict,
+    trade_date: str,
+    ticker: str,
+    fields: Optional[dict] = None,
 ) -> str:
-    """Build the LLM review prompt."""
+    """Build the LLM review prompt for the selected analyst set."""
+    from tradingagents.agents.utils.structured import strip_freetext_marker
+
+    fields = fields if fields is not None else REPORT_FIELDS
     report_sections = []
-    for analyst_type, field in REPORT_FIELDS.items():
+    for analyst_type, field in fields.items():
         name = ANALYST_NAMES[analyst_type]
         content = reports.get(field, "（未运行）")
         if not content:
             content = "（报告为空）"
+        else:
+            content = strip_freetext_marker(content)
         if len(content) > 3000:
             content = content[:3000] + "\n... (truncated for review)"
         report_sections.append(f"### {name} ({analyst_type})\n{content}")
 
     all_reports = "\n\n".join(report_sections)
+    n = len(fields)
 
-    return f"""你是数据质量审核员。以下是 7 位分析师对 {ticker} 在 {trade_date} 的研究报告。请逐一审核。
+    return f"""你是数据质量审核员。以下是 {n} 位分析师对 {ticker} 在 {trade_date} 的研究报告。请逐一审核。
 
 {all_reports}
 
@@ -94,13 +108,7 @@ def _build_review_prompt(
 
 | 分析师 | 评级 | 数据时效 | 缺失项 | 备注 |
 |--------|------|----------|--------|------|
-| 技术分析师 | A/B/C/D/F | 是否匹配交易日 | 列出缺失的必采项 | 简要说明 |
-| 情绪分析师 | ... | ... | ... | ... |
-| 新闻分析师 | ... | ... | ... | ... |
-| 基本面分析师 | ... | ... | ... | ... |
-| 政策分析师 | ... | ... | ... | ... |
-| 游资追踪师 | ... | ... | ... | ... |
-| 解禁监控师 | ... | ... | ... | ... |
+（仅列出上方实际运行的分析师）
 
 **整体评级**: A/B/C/D/F
 **数据可信度**: 高/中/低
@@ -115,24 +123,31 @@ def _build_review_prompt(
 """
 
 
-def create_quality_gate(llm):
+def create_quality_gate(llm, selected_analysts=None):
     """Factory for the data quality gate node.
 
     Sits between the last analyst Msg Clear and Bull Researcher.
     Layer 1: hard checks (code). Layer 2: LLM review (one call).
-    Writes data_quality_summary to state for downstream consumers.
+    Only grades analysts that were selected for the run.
+    Writes data_quality_summary and data_quality_failed to state.
     """
+    fields = {
+        k: v
+        for k, v in REPORT_FIELDS.items()
+        if selected_analysts is None or k in selected_analysts
+    }
+    threshold = _fail_threshold(len(fields)) if fields else 2
 
     def quality_gate_node(state) -> dict:
         trade_date = state["trade_date"]
         ticker = state["company_of_interest"]
 
         reports = {}
-        for analyst_type, field in REPORT_FIELDS.items():
+        for analyst_type, field in fields.items():
             reports[field] = state.get(field, "")
 
         hard_results = {}
-        for analyst_type, field in REPORT_FIELDS.items():
+        for analyst_type, field in fields.items():
             grade, detail = _hard_check_report(analyst_type, reports[field])
             hard_results[analyst_type] = (grade, detail)
 
@@ -145,11 +160,14 @@ def create_quality_gate(llm):
         fail_count = sum(
             1 for _, (g, _) in hard_results.items() if g in ("F", "D")
         )
+        data_quality_failed = fail_count >= threshold
 
         llm_review = ""
-        if fail_count < 4:
+        if fail_count < threshold:
             try:
-                review_prompt = _build_review_prompt(reports, trade_date, ticker)
+                review_prompt = _build_review_prompt(
+                    reports, trade_date, ticker, fields
+                )
                 response = llm.invoke(review_prompt)
                 llm_review = response.content
             except Exception as e:
@@ -160,9 +178,14 @@ def create_quality_gate(llm):
             f"**标的**: {ticker} | **交易日**: {trade_date}\n\n"
             f"### 硬检查结果\n{hard_summary}\n\n"
             f"### LLM 复审\n"
-            f"{llm_review if llm_review else '（跳过 — 多数报告未通过硬检查）'}\n"
+            f"{llm_review if llm_review else '（跳过 — 多数报告未通过硬检查）'}\n\n"
+            f"**data_quality_failed**: {str(data_quality_failed).lower()} "
+            f"(fail_count={fail_count}, threshold={threshold})\n"
         )
 
-        return {"data_quality_summary": summary}
+        return {
+            "data_quality_summary": summary,
+            "data_quality_failed": data_quality_failed,
+        }
 
     return quality_gate_node

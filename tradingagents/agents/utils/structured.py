@@ -8,24 +8,51 @@ canonical pattern:
    not support structured output (rare; mostly older Ollama models), the
    wrap is skipped and the agent uses free-text generation instead.
 2. At invocation, run the structured call and render the result back to
-   markdown. If the structured call itself fails for any reason
-   (malformed JSON from a weak model, transient provider issue), fall
-   back to a plain ``llm.invoke`` so the pipeline never blocks.
-
-Centralising the pattern here keeps the agent factories small and ensures
-all three agents log the same warnings when fallback fires.
+   markdown. Schema/parse failures fall back to free text with an explicit
+   marker; transient provider faults (timeouts, rate limits, auth) propagate.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Callable, Optional, TypeVar
+from json import JSONDecodeError
+from typing import Any, Callable, Optional, TypeVar, Tuple, Type
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
+
+try:
+    from langchain_core.exceptions import OutputParserException
+except ImportError:  # pragma: no cover
+    OutputParserException = ()  # type: ignore[misc, assignment]
+
+_SCHEMA_ERRORS: Tuple[Type[BaseException], ...] = (
+    ValidationError,
+    JSONDecodeError,
+    KeyError,
+    TypeError,
+    AttributeError,  # e.g. structured invoke returned None / wrong shape
+    ValueError,
+)
+if OutputParserException is not ():
+    _SCHEMA_ERRORS = _SCHEMA_ERRORS + (OutputParserException,)  # type: ignore[arg-type]
+
+# Survives into the final report so CLI/web/memory can surface the degradation.
+FREETEXT_MARKER = "<!-- ta:structured_output=failed -->"
+
+
+def strip_freetext_marker(text: str) -> str:
+    """Remove the structured-output failure marker before LLM prompt injection."""
+    if not text:
+        return text
+    return text.replace(FREETEXT_MARKER, "").lstrip("\n")
+
+
+def has_freetext_marker(text: str) -> bool:
+    return bool(text) and FREETEXT_MARKER in text
 
 
 def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Optional[Any]:
@@ -52,22 +79,23 @@ def invoke_structured_or_freetext(
     render: Callable[[T], str],
     agent_name: str,
 ) -> str:
-    """Run the structured call and render to markdown; fall back to free-text on any failure.
+    """Run the structured call and render to markdown; fall back on schema errors only.
 
-    ``prompt`` is whatever the underlying LLM accepts (a string for chat
-    invocations, a list of message dicts for chat models that take that
-    shape). The same value is forwarded to the free-text path so the
-    fallback sees the same input the structured call did.
+    Transient provider faults (timeouts, rate limits, auth) are **not** caught —
+    they must propagate so the run fails loudly rather than silently degrading.
     """
     if structured_llm is not None:
         try:
-            result = structured_llm.invoke(prompt)
-            return render(result)
-        except Exception as exc:
+            return render(structured_llm.invoke(prompt))
+        except _SCHEMA_ERRORS as exc:
             logger.warning(
-                "%s: structured-output invocation failed (%s); retrying once as free text",
+                "%s: model returned output that does not match the schema (%s); "
+                "falling back to free text — the rating for this run will be "
+                "recovered heuristically and may be unreliable",
                 agent_name, exc,
             )
+        # Anything else (timeout, rate limit, auth) propagates.
 
     response = plain_llm.invoke(prompt)
-    return response.content
+    content = getattr(response, "content", response)
+    return f"{FREETEXT_MARKER}\n{content}"

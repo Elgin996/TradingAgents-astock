@@ -256,11 +256,27 @@ if viewing_history:
     except Exception as exc:
         st.error(f"加载失败: {exc}")
 
-# State 2: Analysis running
+# State 2: Analysis running — prefer fragment polling so the whole script
+# does not re-execute every 2s (F6.7). Fall back to sleep+rerun if unavailable.
 elif tracker and tracker.is_running:
-    render_progress(tracker)
-    time.sleep(2)
-    st.rerun()
+    if hasattr(st, "fragment"):
+        @st.fragment(run_every=2)
+        def _progress_fragment() -> None:
+            t = st.session_state.get("tracker")
+            if t is None:
+                return
+            if t.is_running:
+                render_progress(t)
+            else:
+                # Promote to complete/error view on the next full-script run.
+                st.rerun()
+
+        _progress_fragment()
+    else:
+        # st.fragment unavailable on this Streamlit build — full-script poll.
+        render_progress(tracker)
+        time.sleep(2)
+        st.rerun()
 
 # State 3: Analysis complete
 elif tracker and tracker.is_complete:
