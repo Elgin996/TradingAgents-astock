@@ -47,7 +47,7 @@ def _detect_completed_stages(
 ) -> None:
     """Check the streamed chunk for newly completed stages."""
     report_stages = [
-        stage for stage in stages_for(tracker.analysis_mode)
+        stage for stage in stages_for(tracker.analysis_mode, tracker.analysis_capabilities)
         if stage["id"] not in {"quality_gate", "debate", "trader", "risk", "pm"}
     ]
     for stage in report_stages:
@@ -87,7 +87,7 @@ def _detect_completed_stages(
 
 def _infer_active_stage(tracker: ProgressTracker) -> None:
     """Set the current_stage to the first non-completed stage."""
-    for stage in stages_for(tracker.analysis_mode):
+    for stage in stages_for(tracker.analysis_mode, tracker.analysis_capabilities):
         sid = stage["id"]
         if tracker.stage_status(sid) == "pending":
             tracker.mark_stage_active(sid)
@@ -127,6 +127,7 @@ def _run(
         analysis_mode=analysis_mode,
         instrument_profile=instrument_profile,
     )
+    tracker.analysis_capabilities = list(graph.analysis_capabilities or [])
     reset_active_capabilities(capability_token)
     capability_token = set_active_capabilities(
         graph.analysis_capabilities if analysis_mode == "etf" else None

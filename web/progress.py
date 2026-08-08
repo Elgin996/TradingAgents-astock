@@ -37,8 +37,26 @@ ETF_PIPELINE_STAGES: list[dict[str, str]] = [
 STAGE_IDS = [s["id"] for s in PIPELINE_STAGES]
 
 
-def stages_for(analysis_mode: str) -> list[dict[str, str]]:
-    return ETF_PIPELINE_STAGES if analysis_mode == "etf" else PIPELINE_STAGES
+def stages_for(
+    analysis_mode: str,
+    capabilities: list[str] | None = None,
+) -> list[dict[str, str]]:
+    """Return pipeline stages for the mode, pruned by runtime capabilities."""
+    if analysis_mode != "etf":
+        return PIPELINE_STAGES
+    if capabilities is None:
+        return ETF_PIPELINE_STAGES
+    from tradingagents.dataflows.analysis_capabilities import (
+        ETF_ANALYST_REQUIRED_CAPABILITIES,
+    )
+
+    enabled = frozenset(capabilities)
+    kept: list[dict[str, str]] = []
+    for stage in ETF_PIPELINE_STAGES:
+        required = ETF_ANALYST_REQUIRED_CAPABILITIES.get(stage["id"])
+        if required is None or required.issubset(enabled):
+            kept.append(stage)
+    return kept
 
 
 @dataclass
@@ -49,6 +67,7 @@ class ProgressTracker:
     trade_date: str = ""
     analysis_mode: str = "stock"
     instrument_profile: dict[str, Any] | None = None
+    analysis_capabilities: list[str] | None = None
     start_time: float = field(default_factory=time.time)
 
     is_running: bool = False

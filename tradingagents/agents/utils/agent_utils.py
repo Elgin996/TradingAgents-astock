@@ -57,6 +57,9 @@ def build_instrument_context(
     if instrument_profile and instrument_profile.get("security_type") == "etf":
         limit = instrument_profile.get("price_limit_pct")
         limit_value = limit.get("value") if isinstance(limit, dict) else limit
+        limit_status = (
+            limit.get("status") if isinstance(limit, dict) else None
+        ) or "assumed"
         tracking_code = instrument_profile.get("tracking_index_code")
         if isinstance(tracking_code, dict):
             tracking_code = tracking_code.get("value", {}).get("code")
@@ -67,9 +70,9 @@ def build_instrument_context(
             f"{instrument_profile.get('tracking_index_name')}. "
             f"Tracking index code: {tracking_code or 'unavailable'}. "
             f"Trading rules: T+1, minimum lot 100 shares, price limit "
-            f"{limit_value or '10'}%. Use ETF/index evidence only; never use "
-            "company revenue, management, lockups, or insider transactions. "
-            "Use the exact ETF code in every tool call."
+            f"{limit_value or '10'}% ({limit_status}). Use ETF/index evidence "
+            "only; never use company revenue, management, lockups, or insider "
+            "transactions. Use the exact ETF code in every tool call."
         )
     return (
         f"The instrument to analyze is `{ticker}`. "
@@ -90,6 +93,81 @@ def build_evidence_lexicon(analysis_mode: str, capabilities: list[str] | None) -
         "Prohibited evidence: company financials, earnings forecasts, management, "
         "insider transactions, lockups, Dragon Tiger Board, or claims about real-time holdings. "
         f"Active capabilities: {', '.join(capabilities or [])}."
+    )
+
+
+def build_general_debate_points(analysis_mode: str, side: str) -> str:
+    """Mode-specific thesis bullets injected into the shared bull/bear prompt body."""
+    if analysis_mode == "etf":
+        if side == "bull":
+            return (
+                "General bull points:\n"
+                "- Index Momentum: Tracking-index trend, relative strength, and breadth\n"
+                "- Policy / Theme Support: Policy or industry catalysts that affect the index\n"
+                "- ETF Tradability: Liquidity, disclosed shares/AUM direction, and data quality\n"
+                "- Bear Counterpoints: Refute bear claims with dated ETF/index evidence\n"
+                "- Engagement: Argue conversationally against the bear analyst"
+            )
+        return (
+            "General bear points:\n"
+            "- Index Deterioration: Weakening trend, crowded theme, or policy reversal\n"
+            "- Tradability Risk: Thin liquidity, stale disclosures, or tracking uncertainty\n"
+            "- Overconfidence: Challenge bull claims that over-read share changes or news\n"
+            "- Bull Counterpoints: Expose optimistic assumptions with dated evidence\n"
+            "- Engagement: Argue conversationally against the bull analyst"
+        )
+    if side == "bull":
+        return (
+            "General bull points:\n"
+            "- Growth Potential: Market opportunities, revenue projections, and scalability\n"
+            "- Competitive Advantages: Unique products, dominant market positioning, or moat\n"
+            "- Positive Indicators: Financial health, industry trends, and recent positive news\n"
+            "- Bear Counterpoints: Critically analyze the bear argument with specific data\n"
+            "- Engagement: Present your argument conversationally with the bear analyst"
+        )
+    return (
+        "General bear points:\n"
+        "- Risks and Challenges: Market saturation, financial instability, or macro threats\n"
+        "- Competitive Weaknesses: Weaker positioning, declining innovation, or competitors\n"
+        "- Negative Indicators: Evidence from financials, market trends, or adverse news\n"
+        "- Bull Counterpoints: Expose over-optimistic assumptions with specific data\n"
+        "- Engagement: Present your argument conversationally with the bull analyst"
+    )
+
+
+def build_trading_constraints(analysis_mode: str, instrument_profile: dict | None = None) -> str:
+    """Return the trading-rule block for trader/PM without duplicating prompt files."""
+    if analysis_mode == "etf":
+        limit = 10
+        limit_status = "assumed"
+        if isinstance(instrument_profile, dict):
+            raw = instrument_profile.get("price_limit_pct")
+            if isinstance(raw, dict):
+                limit = raw.get("value") or 10
+                limit_status = raw.get("status") or "assumed"
+            elif raw is not None:
+                limit = raw
+        return (
+            "ETF trading constraints (must factor into the decision):\n"
+            "- T+1 settlement for secondary-market ETF shares\n"
+            f"- Daily price limit: ±{limit}% ({limit_status}); do not invent board-specific stock rules\n"
+            "- Minimum lot: 100 shares\n"
+            "- Use only ETF technical, liquidity, structure, and index-news evidence\n"
+            "- Do not cite company financials, management, lockups, or insider activity\n"
+            "- Trading hours follow the A-share session calendar"
+        )
+    return (
+        "A-Stock Trading Constraints (must factor into your decision):\n"
+        "- T+1 settlement: shares bought today cannot be sold until the next trading day\n"
+        "- Daily price limits: main board ±10%, STAR/ChiNext ±20%, Beijing Stock Exchange ±30%. "
+        "ST/*ST do NOT get a narrower band after 2026-07-06\n"
+        "- Newly listed stocks have no price limit for their first 5 trading days "
+        "(Beijing Stock Exchange: first day only)\n"
+        "- Minimum lot: 100 shares on main board and ChiNext; STAR 200 shares minimum; "
+        "Beijing Stock Exchange 100 shares minimum\n"
+        "- Trading hours (Beijing time): call auction 09:15-09:25, continuous "
+        "09:30-11:30 / 13:00-14:57, closing auction 14:57-15:00, after-hours "
+        "fixed-price session 15:05-15:30"
     )
 
 
@@ -122,12 +200,26 @@ def build_risk_framework(analysis_mode: str, posture: str) -> str:
 def build_analysis_report_context(state: dict) -> str:
     """Render only the report fields that are semantically valid for this mode."""
     if state.get("analysis_mode") == "etf":
-        return (
-            f"ETF technical report:\n{state.get('market_report', '')}\n\n"
-            f"ETF liquidity report:\n{state.get('etf_liquidity_report', '')}\n\n"
-            f"ETF structure report:\n{state.get('etf_profile_report', '')}\n\n"
-            f"Index news and policy report:\n{state.get('etf_index_news_report', '')}"
-        )
+        from tradingagents.dataflows.analysis_capabilities import report_field_is_active
+
+        capabilities = state.get("analysis_capabilities")
+        sections = [
+            ("market_report", "ETF technical report"),
+            ("etf_liquidity_report", "ETF liquidity report"),
+            ("etf_profile_report", "ETF structure report"),
+            ("etf_index_news_report", "Index news and policy report"),
+        ]
+        parts = []
+        for field, label in sections:
+            if report_field_is_active(field, capabilities):
+                parts.append(f"{label}:\n{state.get(field, '')}")
+        unavailable = state.get("analysis_unavailable_capabilities") or {}
+        if unavailable:
+            parts.append(
+                "Unavailable data:\n"
+                + "\n".join(f"- {k}: {v}" for k, v in unavailable.items())
+            )
+        return "\n\n".join(parts)
     return (
         f"Market research report:\n{state.get('market_report', '')}\n\n"
         f"Social media sentiment report:\n{state.get('sentiment_report', '')}\n\n"

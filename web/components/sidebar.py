@@ -37,6 +37,36 @@ _PROVIDER_DISPLAY = [name for name, _ in _PROVIDERS]
 _PROVIDER_KEYS = [key for _, key in _PROVIDERS]
 
 
+_EXCHANGE_CN = {"SSE": "上交所", "SZSE": "深交所"}
+
+
+def _format_price_limit_caption(profile: dict[str, Any]) -> str:
+    limit = profile.get("price_limit_pct")
+    if isinstance(limit, dict):
+        value = limit.get("value", 10)
+        status = limit.get("status", "assumed")
+    else:
+        value = 10
+        status = "assumed"
+    status_cn = {
+        "derived": "推导",
+        "assumed": "假定",
+        "ok": "确认",
+    }.get(str(status), str(status))
+    return f"涨跌幅 {value}%（{status_cn}）"
+
+
+def _history_mode_label(entry: dict[str, Any]) -> str:
+    mode = entry.get("analysis_mode") or "stock"
+    if mode == "etf":
+        index_name = ""
+        profile = entry.get("instrument_profile") or {}
+        if isinstance(profile, dict):
+            index_name = profile.get("tracking_index_name") or ""
+        return f"ETF{(' · ' + index_name) if index_name else ''}"
+    return "个股"
+
+
 def _resolve_user_input(raw: str) -> tuple[str, str | None]:
     """Resolve raw user input to (ticker_code, error_msg).
 
@@ -69,6 +99,13 @@ def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, 
         return "unknown", None, f"证券主数据暂不可用，请重试：{exc}"
 
     if record.classification == "domestic_equity_etf":
+        from tradingagents.dataflows.instrument import derive_price_limit_pct
+
+        price_limit = derive_price_limit_pct(
+            symbol=record.symbol,
+            fund_name=record.fund_name,
+            tracking_index_name=record.tracking_index_name,
+        ).to_dict()
         return (
             "etf",
             {
@@ -85,6 +122,7 @@ def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, 
                 "listed_or_established_date": record.listed_or_established_date,
                 "management_fee": record.management_fee,
                 "custodian_fee": record.custodian_fee,
+                "price_limit_pct": price_limit,
                 "profile_as_of": date.today().isoformat(),
                 "source": "mootdx securities master + Eastmoney fund profile",
             },
@@ -139,6 +177,14 @@ def _clear_analysis_artifacts(
     clear_checkpoint(
         DEFAULT_CONFIG["data_cache_dir"], ticker, trade_date, analysis_mode
     )
+
+
+def _clear_conflicting_mode_artifacts(
+    ticker: str, trade_date: str, analysis_mode: str
+) -> None:
+    """Drop same-ticker/date artifacts from the opposite analysis mode."""
+    other_mode = "stock" if analysis_mode == "etf" else "etf"
+    _clear_analysis_artifacts(ticker, trade_date, other_mode)
 
 
 def _render_analysis_controls(raw_ticker: str, trade_date_value: date) -> None:
@@ -444,13 +490,15 @@ def render_sidebar() -> None:
     elif instrument_error:
         st.error(f"❌ {instrument_error}")
     elif analysis_mode == "etf" and instrument_profile is not None:
-        st.success(
-            f"识别为 ETF · {instrument_profile['fund_name']} · "
-            f"{instrument_profile['exchange']}"
+        exchange_cn = _EXCHANGE_CN.get(
+            instrument_profile["exchange"], instrument_profile["exchange"]
         )
+        st.success(
+            f"识别为 ETF · {instrument_profile['fund_name']} · {exchange_cn}"
+        )
+        limit_caption = _format_price_limit_caption(instrument_profile)
         st.caption(
-            f"跟踪 {instrument_profile['tracking_index_name']} · T+1 · "
-            "最小交易单位 100 份"
+            f"跟踪 {instrument_profile['tracking_index_name']} · T+1 · {limit_caption}"
         )
         if instrument_profile["tracking_index_code"] is None:
             st.caption("该基金资料未提供指数代码，请在开始前填写并确认来源。")
@@ -510,6 +558,7 @@ def render_sidebar() -> None:
             "analysis_mode": analysis_mode,
             "instrument_profile": instrument_profile,
             "fresh": True,
+            "clear_other_mode": True,
         }
         st.session_state["viewing_history"] = None
 
@@ -531,10 +580,11 @@ def render_sidebar() -> None:
             }.get(entry.get("status"), "可继续")
             step = entry.get("checkpoint_step")
             step_label = f" · step {step}" if step is not None else ""
-            label = f"{t}  ·  {d}  ·  {status_label}{step_label}"
+            mode_label = _history_mode_label(entry)
+            label = f"{t}  ·  {d}  ·  {mode_label}  ·  {status_label}{step_label}"
             if st.button(
                 label,
-                key=f"resume_{t}_{d}",
+                key=f"resume_{t}_{d}_{entry.get('analysis_mode', 'stock')}",
                 use_container_width=True,
                 disabled=is_busy,
             ):
@@ -556,8 +606,9 @@ def render_sidebar() -> None:
 
     for entry in history[:20]:
         t, d = entry["ticker"], entry["date"]
-        label = f"{t}  ·  {d}"
-        if st.button(label, key=f"hist_{t}_{d}", use_container_width=True):
+        mode_label = _history_mode_label(entry)
+        label = f"{t}  ·  {d}  ·  {mode_label}"
+        if st.button(label, key=f"hist_{t}_{d}_{mode_label}", use_container_width=True):
             st.session_state["viewing_history"] = entry["path"]
             st.session_state["start_analysis"] = None
 

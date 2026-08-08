@@ -146,17 +146,33 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
     Writes data_quality_summary and data_quality_failed to state.
     """
     source_fields = ETF_REPORT_FIELDS if analysis_mode == "etf" else REPORT_FIELDS
-    fields = {
+    base_fields = {
         k: v
         for k, v in source_fields.items()
         if selected_analysts is None or k in selected_analysts
     }
-    threshold = _fail_threshold(len(fields)) if fields else 2
 
     def quality_gate_node(state) -> dict:
         trade_date = state["trade_date"]
         ticker = state["company_of_interest"]
         unavailable = state.get("analysis_unavailable_capabilities", {})
+        capabilities = state.get("analysis_capabilities")
+
+        fields = dict(base_fields)
+        if analysis_mode == "etf" and capabilities is not None:
+            from tradingagents.dataflows.analysis_capabilities import (
+                ETF_ANALYST_REQUIRED_CAPABILITIES,
+            )
+
+            enabled = frozenset(capabilities)
+            fields = {
+                analyst: field
+                for analyst, field in base_fields.items()
+                if ETF_ANALYST_REQUIRED_CAPABILITIES.get(
+                    analyst, frozenset()
+                ).issubset(enabled)
+            }
+        threshold = _fail_threshold(len(fields)) if fields else 2
 
         reports = {}
         for analyst_type, field in fields.items():
@@ -173,15 +189,15 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
         for analyst_type, (grade, detail) in hard_results.items():
             name = ANALYST_NAMES[analyst_type]
             hard_summary_lines.append(f"- {name}: [{grade}] {detail}")
-        hard_summary = "\n".join(hard_summary_lines)
+        hard_summary = "\n".join(hard_summary_lines) if hard_summary_lines else "- （无启用分析师栏目）"
 
         fail_count = sum(
             1 for _, (g, _) in hard_results.items() if g in ("F", "D")
         )
-        data_quality_failed = fail_count >= threshold
+        data_quality_failed = bool(fields) and fail_count >= threshold
 
         llm_review = ""
-        if fail_count < threshold:
+        if fields and fail_count < threshold:
             try:
                 review_prompt = _build_review_prompt(
                     reports, trade_date, ticker, fields

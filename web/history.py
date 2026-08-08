@@ -28,20 +28,32 @@ def _results_dir() -> Path:
 def get_history() -> list[dict[str, str]]:
     """Scan saved analysis logs and return a sorted list (newest first).
 
-    Each entry: {"ticker": "300750", "date": "2026-05-12", "path": "/abs/path/...json"}
+    Each entry: {"ticker", "date", "path", optional "analysis_mode",
+    "instrument_profile"} when present in the saved state.
     """
     root = _results_dir()
     if not root.exists():
         return []
 
-    entries: list[dict[str, str]] = []
+    entries: list[dict[str, Any]] = []
     for log_file in root.rglob("full_states_log_*.json"):
         match = re.search(r"full_states_log_(\d{4}-\d{2}-\d{2})\.json$", log_file.name)
         if not match:
             continue
         date = match.group(1)
         ticker = log_file.parent.parent.name
-        entries.append({"ticker": ticker, "date": date, "path": str(log_file)})
+        entry: dict[str, Any] = {"ticker": ticker, "date": date, "path": str(log_file)}
+        try:
+            with open(log_file, encoding="utf-8") as f:
+                payload = json.load(f)
+            state = payload.get(date) if isinstance(payload, dict) else None
+            if isinstance(state, dict):
+                entry["analysis_mode"] = state.get("analysis_mode", "stock")
+                if state.get("instrument_profile"):
+                    entry["instrument_profile"] = state.get("instrument_profile")
+        except (OSError, json.JSONDecodeError, TypeError):
+            entry["analysis_mode"] = "stock"
+        entries.append(entry)
 
     entries.sort(key=lambda e: e["date"], reverse=True)
     return entries

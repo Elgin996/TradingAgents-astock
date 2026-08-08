@@ -562,12 +562,20 @@ def _collect_sections(
 
     report_sections = _REPORT_SECTIONS
     if final_state.get("analysis_mode") == "etf":
+        from tradingagents.dataflows.analysis_capabilities import report_field_is_active
+
+        capabilities = final_state.get("analysis_capabilities")
         report_sections = [
-            ("market_report", "ETF 技术分析"),
-            ("etf_liquidity_report", "流动性与交易"),
-            ("etf_profile_report", "ETF 结构、份额与规模"),
-            ("etf_index_news_report", "指数新闻与政策"),
-            ("data_quality_summary", "数据质量与不可得数据"),
+            (key, title)
+            for key, title in [
+                ("market_report", "ETF 技术分析"),
+                ("etf_liquidity_report", "流动性与交易"),
+                ("etf_profile_report", "ETF 结构、份额与规模"),
+                ("etf_index_news_report", "指数新闻与政策"),
+                ("data_quality_summary", "数据质量与不可得数据"),
+            ]
+            if key == "data_quality_summary"
+            or report_field_is_active(key, capabilities)
         ]
     for key, title in report_sections:
         content = final_state.get(key, "")

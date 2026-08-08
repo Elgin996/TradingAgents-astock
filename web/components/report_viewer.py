@@ -182,6 +182,15 @@ def render_report(
         if final_state.get("analysis_mode") == "etf"
         else _ANALYST_SECTIONS
     )
+    if final_state.get("analysis_mode") == "etf":
+        from tradingagents.dataflows.analysis_capabilities import report_field_is_active
+
+        capabilities = final_state.get("analysis_capabilities")
+        sections = [
+            (key, title)
+            for key, title in sections
+            if report_field_is_active(key, capabilities)
+        ]
     for key, title in sections:
         content = final_state.get(key, "")
         if not content:

@@ -10,6 +10,7 @@ from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
 from tradingagents.agents.utils.agent_utils import (
     build_evidence_lexicon,
     build_instrument_context,
+    build_trading_constraints,
     get_language_instruction,
 )
 from tradingagents.agents.utils.structured import (
@@ -30,62 +31,52 @@ def create_trader(llm):
 
     def trader_node(state, name):
         company_name = state["company_of_interest"]
+        analysis_mode = state.get("analysis_mode", "stock")
+        instrument_profile = state.get("instrument_profile")
         instrument_context = build_instrument_context(
-            company_name, state.get("instrument_profile")
+            company_name, instrument_profile
         )
         evidence_lexicon = build_evidence_lexicon(
-            state.get("analysis_mode", "stock"), state.get("analysis_capabilities")
+            analysis_mode, state.get("analysis_capabilities")
         )
         investment_plan = state["investment_plan"]
-
-        # Collect A-stock specific analyst reports
-        policy_report = state.get("policy_report", "")
-        hot_money_report = state.get("hot_money_report", "")
-        lockup_report = state.get("lockup_report", "")
-
-        # Build optional A-stock context block
-        astock_context_parts = []
-        if policy_report:
-            astock_context_parts.append(f"Policy Analysis Report:\n{policy_report}")
-        if hot_money_report:
-            astock_context_parts.append(f"Hot Money / Capital Flow Report:\n{hot_money_report}")
-        if lockup_report:
-            astock_context_parts.append(f"Lockup Expiry / Insider Reduction Report:\n{lockup_report}")
-        astock_context = "\n\n".join(astock_context_parts)
-        mode_rules = (
-            "For this ETF, use only its technical, liquidity, fund-structure and "
-            "index-news evidence. Apply the T+1, lot size, and price limit values "
-            "from the instrument context; do not use company-specific reports."
-            if state.get("analysis_mode") == "etf"
-            else "Apply the A-share stock constraints and stock analyst reports."
+        trading_constraints = build_trading_constraints(
+            analysis_mode, instrument_profile
         )
+
+        # Collect A-stock specific analyst reports only in stock mode.
+        astock_context = ""
+        if analysis_mode != "etf":
+            astock_context_parts = []
+            for key, label in (
+                ("policy_report", "Policy Analysis Report"),
+                ("hot_money_report", "Hot Money / Capital Flow Report"),
+                ("lockup_report", "Lockup Expiry / Insider Reduction Report"),
+            ):
+                content = state.get(key, "")
+                if content:
+                    astock_context_parts.append(f"{label}:\n{content}")
+            astock_context = "\n\n".join(astock_context_parts)
+
         analyst_description = (
             "ETF technical, liquidity, structure, and index-news specialists"
-            if state.get("analysis_mode") == "etf"
+            if analysis_mode == "etf"
             else "market, sentiment, news, fundamentals, policy, capital flow, and lockup/reduction specialists"
+        )
+        role_line = (
+            "You are a trading agent specialising in domestic equity ETFs listed in mainland China."
+            if analysis_mode == "etf"
+            else "You are a trading agent specialising in A-share (China mainland) stocks."
         )
 
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "You are a trading agent specialising in A-share (China mainland) stocks. "
+                    f"{role_line} "
                     "Translate the Research Manager's investment plan into a structured "
-                    "transaction view. You must factor in A-stock trading constraints:\n"
-                    "- T+1 settlement: shares bought today cannot be sold until the next trading day\n"
-                    "- Daily price limits: main board ±10%, STAR/ChiNext ±20%, Beijing Stock "
-                    "Exchange ±30%. ST/*ST does NOT narrow the band — main-board ST/*ST moved "
-                    "from ±5% to ±10% on 2026-07-06, and STAR/ChiNext ST/*ST have always been ±20%\n"
-                    "- Newly listed stocks have no price limit for their first 5 trading days "
-                    "(Beijing Stock Exchange: first day only)\n"
-                    "- Minimum lot: 100 shares on main board and ChiNext (100-share multiples); "
-                    "STAR board 200 shares minimum (1-share increments); Beijing Stock Exchange "
-                    "100 shares minimum (1-share increments)\n"
-                    "- Trading hours (Beijing time): call auction 09:15-09:25, continuous "
-                    "09:30-11:30 / 13:00-14:57, closing auction 14:57-15:00, after-hours "
-                    "fixed-price session 15:05-15:30 (all A-shares since 2026-07-06)\n"
-                    "Anchor your reasoning in the analysts' reports and the research plan. "
-                    f"{mode_rules} Evidence constraints: {evidence_lexicon} "
+                    f"transaction view.\n{trading_constraints}\n"
+                    f"Evidence constraints: {evidence_lexicon} "
                     f"{_NO_LEVELS_INSTRUCTION} "
                     "（以上参数仅供技术研究参考，不构成投资建议）"
                 ),

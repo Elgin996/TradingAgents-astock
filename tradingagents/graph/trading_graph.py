@@ -343,50 +343,79 @@ class TradingAgentsGraph:
         exit_px = float(future.loc[holding_days, "Close"])
         return (exit_px - entry) / entry, holding_days
 
-    def _load_csi300_ohlcv(self, end_str: str):
-        """Load CSI 300 OHLCV via mootdx (999300) or Sina sh000300."""
+    def _load_tracking_index_ohlcv(self, index_code: str, end_str: str):
+        """Load index OHLCV for ETF alpha; never silently substitute CSI 300.
+
+        Tracking-index codes are not ordinary equity tickers: Shanghai indexes
+        often use ``000xxx`` while Shenzhen theme indexes use ``399xxx``. Stock
+        routing would mis-send ``000300`` to Shenzhen, so this path uses
+        index-aware Sina symbols and tries the alternate board before giving up.
+        """
         import pandas as pd
         from tradingagents.dataflows.a_stock import (
-            _load_ohlcv_astock,
             _normalize_ohlcv_dates,
             _requests,
             _json,
+            _SH_INDEX_CODES,
         )
 
-        try:
-            return _load_ohlcv_astock("999300", end_str)
-        except Exception as e:
-            logger.debug("mootdx CSI300 (999300) failed: %s; trying Sina sh000300", e)
+        code = str(index_code).strip()
+        if not code:
+            return pd.DataFrame()
+
+        if code.startswith("399"):
+            prefixes = ("sz", "sh")
+        elif code in _SH_INDEX_CODES or code.startswith("000"):
+            prefixes = ("sh", "sz")
+        else:
+            prefixes = ("sh", "sz")
 
         url = (
             "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
             "CN_MarketData.getKLineData"
         )
-        params = {
-            "symbol": "sh000300",
-            "scale": "240",
-            "ma": "no",
-            "datalen": "800",
-        }
-        r = _requests.get(url, params=params, timeout=15)
-        r.raise_for_status()
-        data = _json.loads(r.text)
-        if not data:
-            return pd.DataFrame()
-        rows = [
-            {
-                "Date": item["day"],
-                "Open": float(item["open"]),
-                "High": float(item["high"]),
-                "Low": float(item["low"]),
-                "Close": float(item["close"]),
-                "Volume": int(item["volume"]),
-            }
-            for item in data
-        ]
-        df = _normalize_ohlcv_dates(pd.DataFrame(rows))
-        cutoff = pd.to_datetime(end_str)
-        return df[df["Date"] <= cutoff]
+        for prefix in prefixes:
+            try:
+                params = {
+                    "symbol": f"{prefix}{code}",
+                    "scale": "240",
+                    "ma": "no",
+                    "datalen": "800",
+                }
+                r = _requests.get(url, params=params, timeout=15)
+                r.raise_for_status()
+                data = _json.loads(r.text)
+                if not data:
+                    continue
+                rows = [
+                    {
+                        "Date": item["day"],
+                        "Open": float(item["open"]),
+                        "High": float(item["high"]),
+                        "Low": float(item["low"]),
+                        "Close": float(item["close"]),
+                        "Volume": int(item["volume"]),
+                    }
+                    for item in data
+                ]
+                df = _normalize_ohlcv_dates(pd.DataFrame(rows))
+                cutoff = pd.to_datetime(end_str)
+                return df[df["Date"] <= cutoff]
+            except Exception as exc:
+                logger.debug(
+                    "Index OHLCV %s%s failed: %s", prefix, code, exc
+                )
+        return pd.DataFrame()
+
+    def _load_csi300_ohlcv(self, end_str: str):
+        """Load CSI 300 OHLCV via mootdx (999300) or Sina sh000300."""
+        from tradingagents.dataflows.a_stock import _load_ohlcv_astock
+
+        try:
+            return _load_ohlcv_astock("999300", end_str)
+        except Exception as e:
+            logger.debug("mootdx CSI300 (999300) failed: %s; trying Sina sh000300", e)
+        return self._load_tracking_index_ohlcv("000300", end_str)
 
     def _fetch_returns(
         self,
@@ -414,11 +443,19 @@ class TradingAgentsGraph:
             end_str = end.strftime("%Y-%m-%d")
 
             stock = _load_ohlcv_astock(str(ticker), end_str)
-            benchmark = (
-                _load_ohlcv_astock(benchmark_code, end_str)
-                if benchmark_code
-                else self._load_csi300_ohlcv(end_str)
-            )
+            if benchmark_code:
+                benchmark = self._load_tracking_index_ohlcv(
+                    str(benchmark_code), end_str
+                )
+                if benchmark is None or getattr(benchmark, "empty", True):
+                    logger.warning(
+                        "Tracking-index OHLCV unavailable for %s; skipping alpha",
+                        benchmark_code,
+                    )
+                    raw, days = self._t1_holding_return(stock, trade_date, holding_days)
+                    return (raw, None, days) if raw is not None else (None, None, None)
+            else:
+                benchmark = self._load_csi300_ohlcv(end_str)
 
             raw, days = self._t1_holding_return(stock, trade_date, holding_days)
             bench_ret, bench_days = self._t1_holding_return(
@@ -541,8 +578,14 @@ class TradingAgentsGraph:
         # ETF runs so existing CLI callers and injected test graphs retain
         # their stock workflow instance.
         if analysis_mode == "etf":
+            selected = resolve_analysts(analysis_mode, self.analysis_capabilities)
+            if not selected:
+                raise RuntimeError(
+                    "ETF 运行时能力探测后没有可执行的分析师；"
+                    "请检查行情/基金资料数据源后重试。"
+                )
             self.workflow = self.graph_setup.setup_graph(
-                resolve_analysts(analysis_mode), analysis_mode=analysis_mode
+                selected, analysis_mode=analysis_mode
             )
             self.graph = self.workflow.compile()
 

@@ -39,6 +39,13 @@ from tradingagents.utils.file_lock import FileLock
 logger = logging.getLogger(__name__)
 _SH_INDEX_CODES = frozenset({"000016", "000300", "000905", "000852", "000688"})
 
+# Index-level news reuse across ETFs that share the same tracking index.
+_INDEX_NEWS_CACHE: dict[tuple[str, str, str], str] = {}
+
+
+def _is_index_code(code: str) -> bool:
+    return code in _SH_INDEX_CODES or code.startswith(("000", "399"))
+
 
 # ---------------------------------------------------------------------------
 # Helpers: ticker format & market detection
@@ -440,6 +447,7 @@ def _sina_kline_fallback(code: str, start_date: str = None, end_date: str = None
     """Fetch daily K-line from Sina HTTP API as mootdx fallback.
 
     Returns DataFrame with columns: Date, Open, High, Low, Close, Volume.
+    Sina's public K-line payload does not include Amount.
     """
     url = (
         "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
@@ -477,6 +485,61 @@ def _sina_kline_fallback(code: str, start_date: str = None, end_date: str = None
     if end_date:
         df = df[df["Date"] <= pd.to_datetime(end_date)]
 
+    return df
+
+
+def _em_kline_with_amount(
+    code: str, start_date: str = None, end_date: str = None
+) -> pd.DataFrame:
+    """Fetch daily OHLCV + Amount from Eastmoney push2his for ETF liquidity.
+
+    Field mapping (verified against push2his kline payload):
+    f51=date, f52=open, f53=close, f54=high, f55=low, f56=volume, f57=amount.
+    """
+    params = {
+        "secid": _em_secid(code),
+        "fields1": "f1,f2,f3,f4,f5,f6",
+        "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
+        "klt": "101",
+        "fqt": "1",
+        "end": "20500101",
+        "lmt": "800",
+    }
+    response = _em_get(
+        "https://push2his.eastmoney.com/api/qt/stock/kline/get",
+        params=params,
+    )
+    response.raise_for_status()
+    payload = response.json()
+    klines = (payload.get("data") or {}).get("klines") or []
+    if not klines:
+        return pd.DataFrame()
+
+    rows = []
+    for item in klines:
+        parts = str(item).split(",")
+        if len(parts) < 7:
+            continue
+        rows.append(
+            {
+                "Date": parts[0],
+                "Open": float(parts[1]),
+                "Close": float(parts[2]),
+                "High": float(parts[3]),
+                "Low": float(parts[4]),
+                "Volume": int(float(parts[5])),
+                "Amount": float(parts[6]),
+            }
+        )
+    if not rows:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(rows)
+    df["Date"] = pd.to_datetime(df["Date"])
+    if start_date:
+        df = df[df["Date"] >= pd.to_datetime(start_date)]
+    if end_date:
+        df = df[df["Date"] <= pd.to_datetime(end_date)]
     return df
 
 
@@ -731,13 +794,24 @@ def get_stock_data(
     is_etf_run = active_capabilities() is not None
     data_source = "mootdx (TCP)"
     if is_etf_run:
+        # Prefer Eastmoney so liquidity analysts receive Amount; fall back to
+        # Sina OHLCV (no Amount) when push2his is unavailable.
         try:
-            df = _sina_kline_fallback(code, start_date, end_date)
+            df = _em_kline_with_amount(code, start_date, end_date)
             if df.empty:
-                return "K线数据获取失败：ETF 新浪数据源未返回数据，请检查网络连接"
-            data_source = "sina HTTP (ETF primary)"
-        except Exception:
-            return "K线数据获取失败：ETF 新浪数据源不可用，请检查网络连接"
+                raise ValueError("Eastmoney ETF kline empty")
+            data_source = "eastmoney push2his (ETF primary, includes Amount)"
+        except Exception as em_exc:
+            logger.warning(
+                "Eastmoney ETF kline failed for %s: %s; trying sina", code, em_exc
+            )
+            try:
+                df = _sina_kline_fallback(code, start_date, end_date)
+                if df.empty:
+                    return "K线数据获取失败：ETF 东财与新浪数据源均未返回数据，请检查网络连接"
+                data_source = "sina HTTP (ETF fallback; Amount unavailable)"
+            except Exception:
+                return "K线数据获取失败：ETF 东财与新浪数据源不可用，请检查网络连接"
     else:
         try:
             client = _get_mootdx_client()
@@ -796,14 +870,20 @@ def get_stock_data(
             df[col] = df[col].round(2)
 
     df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
-    csv_out = df[["Date", "Open", "High", "Low", "Close", "Volume"]].to_csv(
-        index=False
-    )
+    export_cols = ["Date", "Open", "High", "Low", "Close", "Volume"]
+    if "Amount" in df.columns:
+        export_cols.append("Amount")
+    csv_out = df[export_cols].to_csv(index=False)
 
     instrument_name = "ETF" if is_etf_run else "Stock"
     header = f"# {instrument_name} data for {code} (A-share) from {start_date} to {end_date}\n"
     header += f"# Total records: {len(df)}\n"
     header += f"# Data source: {data_source}\n"
+    if is_etf_run and "Amount" not in df.columns:
+        header += (
+            "# Note: Amount (成交额) is unavailable from this source; "
+            "do not invent turnover series from Volume alone.\n"
+        )
     header += (
         f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
     )
@@ -1384,6 +1464,9 @@ def get_news(
 ) -> str:
     """Get stock-specific news via East Money direct API (Sina as fallback)."""
     code = _normalize_ticker(ticker)
+    cache_key = (code, start_date, end_date)
+    if _is_index_code(code) and cache_key in _INDEX_NEWS_CACHE:
+        return _INDEX_NEWS_CACHE[cache_key]
 
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
@@ -1405,7 +1488,10 @@ def get_news(
             logger.warning("Sina news fetch failed for %s: %s", code, e)
 
     if not articles:
-        return f"No news found for A-stock '{code}'"
+        result = f"No news found for A-stock '{code}'"
+        if _is_index_code(code):
+            _INDEX_NEWS_CACHE[cache_key] = result
+        return result
 
     news_str = ""
     count = 0
@@ -1433,15 +1519,18 @@ def get_news(
         count += 1
 
     if count == 0:
-        return (
+        result = (
             f"No news found for A-stock '{code}' "
             f"between {start_date} and {end_date}"
         )
-
-    return (
-        f"## {code} (A-stock) News, from {start_date} to {end_date}:\n\n"
-        + news_str
-    )
+    else:
+        result = (
+            f"## {code} (A-stock) News, from {start_date} to {end_date}:\n\n"
+            + news_str
+        )
+    if _is_index_code(code):
+        _INDEX_NEWS_CACHE[cache_key] = result
+    return result
 
 
 # ---- 8. get_global_news ----

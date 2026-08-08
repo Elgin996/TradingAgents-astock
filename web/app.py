@@ -230,6 +230,23 @@ if start_req:
             start_req["trade_date"],
             start_req.get("analysis_mode", "stock"),
         )
+        if start_req.get("clear_other_mode"):
+            other_mode = (
+                "stock"
+                if start_req.get("analysis_mode", "stock") == "etf"
+                else "etf"
+            )
+            clear_incomplete_task(
+                start_req["ticker"],
+                start_req["trade_date"],
+                other_mode,
+            )
+            clear_checkpoint(
+                DEFAULT_CONFIG["data_cache_dir"],
+                start_req["ticker"],
+                start_req["trade_date"],
+                other_mode,
+            )
 
     tracker = ProgressTracker(
         ticker=start_req["ticker"],

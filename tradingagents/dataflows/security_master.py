@@ -1,4 +1,4 @@
-"""Read-only securities-master adapter used during ETF source validation.
+"""Read-only securities-master adapter for ETF identity recognition.
 
 The two sources have deliberately separate responsibilities:
 
@@ -7,9 +7,8 @@ The two sources have deliberately separate responsibilities:
 * Eastmoney's fund profile supplies the fund type and tracking-index fields
   needed to classify an exchange-traded fund.
 
-This adapter does not create an ``InstrumentProfile`` yet.  Eastmoney's public
-profile does not provide a provider-qualified tracking-index code, which is a
-required identity field for the planned ETF analysis mode.
+``InstrumentProfile`` is built by ``instrument.profile_from_fund_master`` after
+the user confirms any missing provider-qualified tracking-index code.
 """
 
 from __future__ import annotations

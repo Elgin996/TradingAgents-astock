@@ -14,6 +14,7 @@ from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
 from tradingagents.agents.utils.agent_utils import (
     build_evidence_lexicon,
     build_instrument_context,
+    build_trading_constraints,
     get_language_instruction,
 )
 from tradingagents.agents.utils.structured import (
@@ -34,17 +35,22 @@ def create_portfolio_manager(llm):
     structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
 
     def portfolio_manager_node(state) -> dict:
+        analysis_mode = state.get("analysis_mode", "stock")
+        instrument_profile = state.get("instrument_profile")
         instrument_context = build_instrument_context(
-            state["company_of_interest"], state.get("instrument_profile")
+            state["company_of_interest"], instrument_profile
         )
         evidence_lexicon = build_evidence_lexicon(
-            state.get("analysis_mode", "stock"), state.get("analysis_capabilities")
+            analysis_mode, state.get("analysis_capabilities")
+        )
+        trading_constraints = build_trading_constraints(
+            analysis_mode, instrument_profile
         )
         mode_rules = (
             "ETF decision: rely on index trend, liquidity, disclosed fund structure "
             "and policy/news. Do not cite company financials, management, lockups, "
             "or insider activity."
-            if state.get("analysis_mode") == "etf"
+            if analysis_mode == "etf"
             else "Stock decision: consider the applicable A-share stock constraints."
         )
 
@@ -69,23 +75,7 @@ Evidence constraints: {evidence_lexicon}
 
 ---
 
-**A-Stock Trading Constraints** (must factor into your decision):
-- T+1 settlement: shares bought today cannot be sold until the next trading day
-- Daily price limits: main board ±10%, STAR/ChiNext ±20%, Beijing Stock Exchange ±30%.
-  Risk-warning stocks (ST/*ST) do NOT get a narrower band: since 2026-07-06 main-board
-  ST/*ST moved from ±5% to ±10% (same as ordinary main-board shares), and STAR/ChiNext
-  ST/*ST have always been ±20%.
-- Newly listed stocks have NO price limit for their first 5 trading days (first day only
-  on the Beijing Stock Exchange) — this matters most for recently-IPO'd names.
-- Minimum lot size: 100 shares (1 手) on main board and ChiNext, in 100-share multiples;
-  STAR board is 200 shares minimum, incrementing by 1 share; Beijing Stock Exchange is
-  100 shares minimum, incrementing by 1 share.
-- Trading hours (Beijing time): opening call auction 09:15-09:25, continuous trading
-  09:30-11:30 and 13:00-14:57, closing call auction 14:57-15:00. Since 2026-07-06 the
-  after-hours fixed-price session (15:05-15:30, traded at the closing price) covers all
-  A-shares and ETFs.
-- ST/delisting risk: ST or *ST status signals regulatory warning; factor into position sizing
-- Margin eligibility: not all A-shares are margin-eligible; assume cash-only unless stated
+{trading_constraints}
 
 ---
 

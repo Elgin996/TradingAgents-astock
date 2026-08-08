@@ -27,9 +27,20 @@ ETF_ANALYSTS: tuple[str, ...] = (
 )
 
 
-def resolve_analysts(analysis_mode: str) -> tuple[str, ...]:
-    """Return the only analyst set valid for the identified instrument mode."""
-    return ETF_ANALYSTS if analysis_mode == "etf" else DEFAULT_ANALYSTS
+def resolve_analysts(
+    analysis_mode: str,
+    capabilities: Sequence[str] | None = None,
+) -> tuple[str, ...]:
+    """Return the only analyst set valid for the identified instrument mode.
+
+    ETF runs further prune analysts whose required capabilities were removed
+    after the runtime data-source probe.
+    """
+    if analysis_mode != "etf":
+        return DEFAULT_ANALYSTS
+    from tradingagents.dataflows.analysis_capabilities import filter_etf_analysts
+
+    return filter_etf_analysts(ETF_ANALYSTS, capabilities)
 
 
 class GraphSetup:

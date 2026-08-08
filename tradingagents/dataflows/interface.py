@@ -220,6 +220,13 @@ def get_vendor(category: str, method: str = None) -> str:
 
 def route_to_vendor(method: str, *args, **kwargs):
     """Route method calls to appropriate vendor implementation with fallback support."""
+    # Capability enforcement must precede any vendor fallback. Otherwise an ETF
+    # analysis that accidentally reaches get_fundamentals would silently get
+    # yfinance/Alpha Vantage data for an unrelated ticker.
+    from tradingagents.dataflows.capability_guard import assert_tool_allowed
+
+    assert_tool_allowed(method)
+
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
     primary_vendors = [v.strip() for v in vendor_config.split(',')]

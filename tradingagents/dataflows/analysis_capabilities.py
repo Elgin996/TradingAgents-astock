@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Iterable, Sequence
 
 
 ETF_PHASE_ONE_CAPABILITIES = frozenset(
@@ -24,6 +24,23 @@ PHASE_CLOSED_CAPABILITIES = {
     "pcf": "阶段 2 已关闭：无公共、稳定的 PCF 申赎清单来源",
 }
 
+# Analyst nodes and the minimum capabilities that keep them in the run.
+# When a required capability is removed at probe time, the analyst/report
+# section/progress stage must disappear instead of running empty tool loops.
+ETF_ANALYST_REQUIRED_CAPABILITIES: dict[str, frozenset[str]] = {
+    "market": frozenset({"price_history", "technical_indicators"}),
+    "etf_liquidity": frozenset({"liquidity_metrics"}),
+    "etf_structure": frozenset({"fund_profile"}),
+    "etf_index_news": frozenset({"index_news_policy"}),
+}
+
+ETF_REPORT_FIELD_CAPABILITIES: dict[str, frozenset[str]] = {
+    "market_report": frozenset({"price_history", "technical_indicators"}),
+    "etf_liquidity_report": frozenset({"liquidity_metrics"}),
+    "etf_profile_report": frozenset({"fund_profile"}),
+    "etf_index_news_report": frozenset({"index_news_policy"}),
+}
+
 
 @dataclass(frozen=True)
 class AnalysisCapabilities:
@@ -34,6 +51,9 @@ class AnalysisCapabilities:
 
     def to_list(self) -> list[str]:
         return sorted(self.enabled)
+
+    def enables(self, required: Iterable[str]) -> bool:
+        return set(required).issubset(self.enabled)
 
     @classmethod
     def for_instrument(
@@ -64,3 +84,31 @@ def resolve_analysis_capabilities(
     return AnalysisCapabilities.for_instrument(
         instrument_profile, analysis_mode, unavailable
     ).to_list()
+
+
+def filter_etf_analysts(
+    analysts: Sequence[str],
+    capabilities: Iterable[str] | None,
+) -> tuple[str, ...]:
+    """Drop ETF analysts whose required capabilities are not active.
+
+    ``capabilities is None`` means “not yet probed”; keep the full ETF set.
+    An explicit empty iterable means every capability-dependent analyst is off.
+    """
+    if capabilities is None:
+        return tuple(analysts)
+    enabled = frozenset(capabilities)
+    kept: list[str] = []
+    for analyst in analysts:
+        required = ETF_ANALYST_REQUIRED_CAPABILITIES.get(analyst)
+        if required is None or required.issubset(enabled):
+            kept.append(analyst)
+    return tuple(kept)
+
+
+def report_field_is_active(field: str, capabilities: Iterable[str] | None) -> bool:
+    """True when a report field is allowed by the active capability set."""
+    required = ETF_REPORT_FIELD_CAPABILITIES.get(field)
+    if required is None:
+        return True
+    return required.issubset(frozenset(capabilities or ()))
