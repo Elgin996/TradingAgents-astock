@@ -8,8 +8,10 @@ empty payload instead of an error — so the failure was silent.
 
 import unittest
 
+import pandas as pd
 import pytest
 
+from tradingagents.dataflows import a_stock
 from tradingagents.dataflows.a_stock import (
     _em_secid,
     _fmt_yi,
@@ -26,10 +28,18 @@ class MarketPrefixRoutingTests(unittest.TestCase):
         self.assertEqual(_get_prefix("601398"), "sh")
         self.assertEqual(_get_prefix("688017"), "sh")
 
+    def test_shanghai_etf_5_prefix(self):
+        for code in ("510300", "512480", "588000"):
+            self.assertEqual(_get_prefix(code), "sh", f"{code} must route to sh")
+
     def test_shenzhen_main_board_and_chinext(self):
         self.assertEqual(_get_prefix("000001"), "sz")
         self.assertEqual(_get_prefix("002463"), "sz")
         self.assertEqual(_get_prefix("300476"), "sz")
+
+    def test_shenzhen_etf_159_prefix(self):
+        self.assertEqual(_get_prefix("159915"), "sz")
+        self.assertEqual(_get_prefix("159792"), "sz")
 
     def test_beijing_legacy_8_prefix(self):
         self.assertEqual(_get_prefix("830799"), "bj")
@@ -49,8 +59,10 @@ class MarketPrefixRoutingTests(unittest.TestCase):
 @pytest.mark.unit
 @pytest.mark.parametrize("code,secid,sina", [
     ("600519", "1.600519", "sh600519"),
+    ("510300", "1.510300", "sh510300"),
     ("000001", "0.000001", "sz000001"),
     ("300750", "0.300750", "sz300750"),
+    ("159915", "0.159915", "sz159915"),
     ("920819", "0.920819", "bj920819"),
     ("832000", "0.832000", "bj832000"),
 ])
@@ -64,6 +76,26 @@ def test_fmt_yi_normalizes_raw_yuan():
     assert _fmt_yi(1e8) == "1.00 亿元"
     assert _fmt_yi(2.5e10) == "250.00 亿元"
     assert _fmt_yi("not-a-number") == "N/A"
+
+
+@pytest.mark.unit
+def test_name_map_includes_shanghai_and_shenzhen_etfs(monkeypatch):
+    """Name resolution must retain ETF rows returned by mootdx."""
+    class FakeClient:
+        def stocks(self, market):
+            rows = {
+                0: [{"code": "159915", "name": "创业板ETF"}],
+                1: [{"code": "510300", "name": "沪深300ETF"}],
+                2: [],
+            }[market]
+            return pd.DataFrame(rows, columns=["code", "name"])
+
+    monkeypatch.setattr(a_stock, "_name_to_code", None)
+    monkeypatch.setattr(a_stock, "_code_to_name", None)
+    monkeypatch.setattr(a_stock, "_get_mootdx_client", FakeClient)
+
+    assert a_stock.resolve_ticker("沪深300ETF") == "510300"
+    assert a_stock.resolve_ticker("创业板ETF") == "159915"
 
 
 if __name__ == "__main__":

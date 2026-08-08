@@ -37,6 +37,12 @@ _ANALYST_SECTIONS = [
     ("hot_money_report", "🔥 游资追踪"),
     ("lockup_report", "🔒 解禁/减持"),
 ]
+_ETF_ANALYST_SECTIONS = [
+    ("market_report", "📊 ETF 技术分析"),
+    ("etf_liquidity_report", "💧 流动性与交易"),
+    ("etf_profile_report", "🏷️ ETF 结构、份额与规模"),
+    ("etf_index_news_report", "📰 指数新闻与政策"),
+]
 
 
 def _safe_filename_label(label: str) -> str:
@@ -105,6 +111,18 @@ def render_report(
     )
 
     st.caption("⚠️ 本报告由 AI 自动生成，仅供学习研究，不构成投资建议。")
+    if final_state.get("analysis_mode") == "etf":
+        profile = final_state.get("instrument_profile") or {}
+        st.caption(
+            f"境内股票 ETF · 跟踪指数：{profile.get('tracking_index_name', '未提供')} · "
+            f"能力：{', '.join(final_state.get('analysis_capabilities', []))}"
+        )
+        unavailable = final_state.get("analysis_unavailable_capabilities") or {}
+        if unavailable:
+            st.caption(
+                "不可得数据："
+                + "；".join(f"{name}（{reason}）" for name, reason in unavailable.items())
+            )
 
     for key in (
         "final_trade_decision",
@@ -159,7 +177,12 @@ def render_report(
 
     st.markdown("### 📊 分析师报告")
 
-    for key, title in _ANALYST_SECTIONS:
+    sections = (
+        _ETF_ANALYST_SECTIONS
+        if final_state.get("analysis_mode") == "etf"
+        else _ANALYST_SECTIONS
+    )
+    for key, title in sections:
         content = final_state.get(key, "")
         if not content:
             continue

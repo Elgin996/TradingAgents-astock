@@ -43,11 +43,15 @@ from tradingagents.agents.utils.agent_utils import (
     get_dragon_tiger_board,
     get_lockup_expiry,
     get_industry_comparison,
+    get_etf_profile,
+    get_etf_quote,
+    get_etf_shares_aum,
+    get_etf_announcements,
 )
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
 from .conditional_logic import ConditionalLogic
-from .setup import DEFAULT_ANALYSTS, GraphSetup
+from .setup import DEFAULT_ANALYSTS, GraphSetup, resolve_analysts
 from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
@@ -198,6 +202,10 @@ class TradingAgentsGraph:
         # State tracking
         self.curr_state = None
         self.ticker = None
+        self.analysis_mode = "stock"
+        self.instrument_profile = None
+        self.analysis_capabilities: list[str] = []
+        self.analysis_unavailable_capabilities: dict[str, str] = {}
         self.log_states_dict = {}  # date to full state dict
 
         # Set up the graph: keep the workflow for recompilation with a checkpointer.
@@ -302,6 +310,15 @@ class TradingAgentsGraph:
                     get_lockup_expiry,
                 ]
             ),
+            "etf_liquidity": ToolNode(
+                [get_stock_data, get_etf_quote]
+            ),
+            "etf_structure": ToolNode(
+                [get_etf_profile, get_etf_shares_aum]
+            ),
+            "etf_index_news": ToolNode(
+                [get_news, get_global_news, get_etf_announcements]
+            ),
         }
 
     @staticmethod
@@ -372,13 +389,18 @@ class TradingAgentsGraph:
         return df[df["Date"] <= cutoff]
 
     def _fetch_returns(
-        self, ticker: str, trade_date: str, holding_days: int = 5
+        self,
+        ticker: str,
+        trade_date: str,
+        holding_days: int = 5,
+        benchmark_code: str | None = None,
     ) -> Tuple[Optional[float], Optional[float], Optional[int]]:
         """Fetch raw and alpha return for ticker over holding_days from trade_date.
 
         Uses the A-share OHLCV loader (mootdx/Sina), not yfinance. Entry is the
         next session's open after ``trade_date`` (executable T+1), exit is that
-        session's close ``holding_days`` trading days later. Benchmark is CSI 300.
+        session's close ``holding_days`` trading days later. ETF entries use their
+        frozen tracking index when available; legacy/stock entries use CSI 300.
 
         Returns (raw_return, alpha_return, actual_holding_days) or
         (None, None, None) if price data is unavailable (too recent, delisted,
@@ -392,7 +414,11 @@ class TradingAgentsGraph:
             end_str = end.strftime("%Y-%m-%d")
 
             stock = _load_ohlcv_astock(str(ticker), end_str)
-            benchmark = self._load_csi300_ohlcv(end_str)
+            benchmark = (
+                _load_ohlcv_astock(benchmark_code, end_str)
+                if benchmark_code
+                else self._load_csi300_ohlcv(end_str)
+            )
 
             raw, days = self._t1_holding_return(stock, trade_date, holding_days)
             bench_ret, bench_days = self._t1_holding_return(
@@ -427,13 +453,25 @@ class TradingAgentsGraph:
 
         updates = []
         for entry in pending:
-            raw, alpha, days = self._fetch_returns(ticker, entry["date"])
+            benchmark_code = (
+                entry.get("tracking_index_code")
+                if entry.get("analysis_mode") == "etf"
+                else None
+            )
+            raw, alpha, days = self._fetch_returns(
+                ticker, entry["date"], benchmark_code=benchmark_code
+            )
             if raw is None:
                 continue  # price not available yet — try again next run
             reflection = self.reflector.reflect_on_final_decision(
                 final_decision=entry.get("decision", ""),
                 raw_return=raw,
                 alpha_return=alpha,
+                benchmark_label=(
+                    entry.get("tracking_index_name")
+                    or benchmark_code
+                    or "CSI 300 (沪深300)"
+                ),
             )
             updates.append({
                 "ticker": ticker,
@@ -447,20 +485,35 @@ class TradingAgentsGraph:
         if updates:
             self.memory_log.batch_update_with_outcomes(updates)
 
-    def propagate(self, company_name, trade_date):
+    def propagate(
+        self,
+        company_name,
+        trade_date,
+        *,
+        analysis_mode: str = "stock",
+        instrument_profile: Optional[Dict[str, Any]] = None,
+    ):
         """Run the trading agents graph for a company on a specific date.
 
         When ``checkpoint_enabled`` is set in config, the graph is recompiled
         with a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
         """
-        return self._run_graph(company_name, trade_date)
+        return self._run_graph(
+            company_name,
+            trade_date,
+            analysis_mode=analysis_mode,
+            instrument_profile=instrument_profile,
+        )
 
     def prepare_graph_run(
         self,
         company_name,
         trade_date,
         callbacks: Optional[List] = None,
+        analysis_mode: str = "stock",
+        instrument_profile: Optional[Dict[str, Any]] = None,
+        unavailable_capabilities: Optional[Dict[str, str]] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Optional[int]]:
         """Prepare graph input/args for a fresh or resumed run.
 
@@ -469,6 +522,29 @@ class TradingAgentsGraph:
         existing thread instead of replaying completed nodes.
         """
         self.ticker = company_name
+        self.analysis_mode = analysis_mode
+        self.instrument_profile = instrument_profile
+        from tradingagents.dataflows.analysis_capabilities import AnalysisCapabilities
+
+        if analysis_mode == "etf" and unavailable_capabilities is None:
+            from tradingagents.dataflows.etf_data import probe_etf_capabilities
+
+            unavailable_capabilities = probe_etf_capabilities(
+                company_name, str(trade_date)
+            )
+        capability_model = AnalysisCapabilities.for_instrument(
+            instrument_profile, analysis_mode, unavailable_capabilities
+        )
+        self.analysis_capabilities = capability_model.to_list()
+        self.analysis_unavailable_capabilities = capability_model.unavailable
+        # The stock workflow is compiled at construction time. Rebuild only
+        # ETF runs so existing CLI callers and injected test graphs retain
+        # their stock workflow instance.
+        if analysis_mode == "etf":
+            self.workflow = self.graph_setup.setup_graph(
+                resolve_analysts(analysis_mode), analysis_mode=analysis_mode
+            )
+            self.graph = self.workflow.compile()
 
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
         self._resolve_pending_entries(company_name)
@@ -485,7 +561,10 @@ class TradingAgentsGraph:
             self.graph = self.workflow.compile(checkpointer=saver)
 
             resume_step = checkpoint_step(
-                self.config["data_cache_dir"], company_name, str(trade_date)
+                self.config["data_cache_dir"],
+                company_name,
+                str(trade_date),
+                analysis_mode,
             )
             if resume_step is not None:
                 logger.info(
@@ -501,7 +580,7 @@ class TradingAgentsGraph:
 
         # Inject thread_id so same ticker+date resumes, different date starts fresh.
         if checkpoint_enabled:
-            tid = thread_id(company_name, str(trade_date))
+            tid = thread_id(company_name, str(trade_date), analysis_mode)
             args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
 
         if checkpoint_enabled and resume_step is not None:
@@ -509,11 +588,24 @@ class TradingAgentsGraph:
 
         # Initialize state only for fresh runs. Passing a new initial state to
         # LangGraph would start a new run and replay completed nodes.
+        profile = instrument_profile if isinstance(instrument_profile, dict) else {}
+        tracking_index_code = profile.get("tracking_index_code")
+        if isinstance(tracking_index_code, dict):
+            tracking_index_code = tracking_index_code.get("value", {}).get("code")
         past_context = self.memory_log.get_past_context(
-            company_name, before_date=str(trade_date)
+            company_name,
+            before_date=str(trade_date),
+            analysis_mode=analysis_mode,
+            tracking_index_code=tracking_index_code,
         )
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date, past_context=past_context
+            company_name,
+            trade_date,
+            past_context=past_context,
+            analysis_mode=analysis_mode,
+            instrument_profile=instrument_profile,
+            analysis_capabilities=self.analysis_capabilities,
+            analysis_unavailable_capabilities=self.analysis_unavailable_capabilities,
         )
         return init_agent_state, args, resume_step
 
@@ -540,16 +632,28 @@ class TradingAgentsGraph:
         self._log_state(trade_date, final_state)
 
         # Store decision for deferred reflection on the next same-ticker run.
+        profile = self.instrument_profile if isinstance(self.instrument_profile, dict) else {}
+        tracking_index_code = profile.get("tracking_index_code")
+        if isinstance(tracking_index_code, dict):
+            tracking_index_code = tracking_index_code.get("value", {}).get("code")
         self.memory_log.store_decision(
             ticker=company_name,
             trade_date=trade_date,
             final_trade_decision=decision,
+            analysis_mode=(
+                self.analysis_mode if isinstance(self.analysis_mode, str) else "stock"
+            ),
+            tracking_index_code=tracking_index_code,
+            tracking_index_name=profile.get("tracking_index_name"),
         )
 
         # Clear checkpoint on successful completion to avoid stale state.
         if self.config.get("checkpoint_enabled"):
             clear_checkpoint(
-                self.config["data_cache_dir"], company_name, str(trade_date)
+                self.config["data_cache_dir"],
+                company_name,
+                str(trade_date),
+                self.analysis_mode,
             )
 
         return self.process_signal(decision)
@@ -561,9 +665,29 @@ class TradingAgentsGraph:
             self._checkpointer_ctx = None
             self.graph = self.workflow.compile()
 
-    def _run_graph(self, company_name, trade_date):
+    def _run_graph(
+        self,
+        company_name,
+        trade_date,
+        *,
+        analysis_mode: str = "stock",
+        instrument_profile: Optional[Dict[str, Any]] = None,
+    ):
         """Execute the graph and write the resulting state to disk and memory log."""
-        init_agent_state, args, _ = self.prepare_graph_run(company_name, trade_date)
+        from tradingagents.dataflows.capability_guard import (
+            reset_active_capabilities,
+            set_active_capabilities,
+        )
+
+        init_agent_state, args, _ = self.prepare_graph_run(
+            company_name,
+            trade_date,
+            analysis_mode=analysis_mode,
+            instrument_profile=instrument_profile,
+        )
+        token = set_active_capabilities(
+            self.analysis_capabilities if analysis_mode == "etf" else None
+        )
 
         try:
             if self.debug:
@@ -589,6 +713,7 @@ class TradingAgentsGraph:
             return final_state, signal
         finally:
             self.close_graph_run()
+            reset_active_capabilities(token)
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""
@@ -597,6 +722,21 @@ class TradingAgentsGraph:
         self.log_states_dict[str(trade_date)] = {
             "company_of_interest": final_state.get("company_of_interest", ""),
             "trade_date": final_state.get("trade_date", str(trade_date)),
+            "analysis_mode": final_state.get("analysis_mode", self.analysis_mode),
+            "analysis_capabilities": final_state.get(
+                "analysis_capabilities", self.analysis_capabilities
+            ),
+            "analysis_unavailable_capabilities": final_state.get(
+                "analysis_unavailable_capabilities",
+                self.analysis_unavailable_capabilities,
+            ),
+            "report_schema_version": final_state.get(
+                "report_schema_version",
+                "etf-v1" if self.analysis_mode == "etf" else "stock-v1",
+            ),
+            "instrument_profile": final_state.get(
+                "instrument_profile", self.instrument_profile
+            ),
             "market_report": final_state.get("market_report", ""),
             "sentiment_report": final_state.get("sentiment_report", ""),
             "news_report": final_state.get("news_report", ""),
@@ -604,6 +744,9 @@ class TradingAgentsGraph:
             "policy_report": final_state.get("policy_report", ""),
             "hot_money_report": final_state.get("hot_money_report", ""),
             "lockup_report": final_state.get("lockup_report", ""),
+            "etf_liquidity_report": final_state.get("etf_liquidity_report", ""),
+            "etf_profile_report": final_state.get("etf_profile_report", ""),
+            "etf_index_news_report": final_state.get("etf_index_news_report", ""),
             "investment_debate_state": {
                 "bull_history": invest.get("bull_history", ""),
                 "bear_history": invest.get("bear_history", ""),

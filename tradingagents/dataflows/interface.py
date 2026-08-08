@@ -43,6 +43,12 @@ from .a_stock import (
     get_lockup_expiry as get_astock_lockup_expiry,
     get_industry_comparison as get_astock_industry_comparison,
 )
+from .etf_data import (
+    get_etf_announcements as get_astock_etf_announcements,
+    get_etf_profile as get_astock_etf_profile,
+    get_etf_quote as get_astock_etf_quote,
+    get_etf_shares_aum as get_astock_etf_shares_aum,
+)
 
 # Configuration and routing logic
 from .config import get_config
@@ -90,7 +96,16 @@ TOOLS_CATEGORIES = {
             "get_lockup_expiry",
             "get_industry_comparison",
         ]
-    }
+    },
+    "etf_data": {
+        "description": "ETF profile, liquidity, shares/AUM, and fund announcements",
+        "tools": [
+            "get_etf_profile",
+            "get_etf_quote",
+            "get_etf_shares_aum",
+            "get_etf_announcements",
+        ],
+    },
 }
 
 VENDOR_LIST = [
@@ -175,6 +190,10 @@ VENDOR_METHODS = {
     "get_industry_comparison": {
         "a_stock": get_astock_industry_comparison,
     },
+    "get_etf_profile": {"a_stock": get_astock_etf_profile},
+    "get_etf_quote": {"a_stock": get_astock_etf_quote},
+    "get_etf_shares_aum": {"a_stock": get_astock_etf_shares_aum},
+    "get_etf_announcements": {"a_stock": get_astock_etf_announcements},
 }
 
 def get_category_for_method(method: str) -> str:

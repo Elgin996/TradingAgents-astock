@@ -1,6 +1,7 @@
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
+    build_evidence_lexicon,
     get_indicators,
     get_language_instruction,
     get_stock_data,
@@ -12,7 +13,12 @@ def create_market_analyst(llm):
 
     def market_analyst_node(state):
         current_date = state["trade_date"]
-        instrument_context = build_instrument_context(state["company_of_interest"])
+        instrument_context = build_instrument_context(
+            state["company_of_interest"], state.get("instrument_profile")
+        )
+        evidence_lexicon = build_evidence_lexicon(
+            state.get("analysis_mode", "stock"), state.get("analysis_capabilities")
+        )
         # User-configurable analysis window (#16). None → previous default (~30).
         lookback = get_config().get("market_lookback_days") or 30
 
@@ -22,7 +28,7 @@ def create_market_analyst(llm):
         ]
 
         system_message = (
-            f"""你是一位专注于 A 股市场的技术分析师。你的任务是从以下技术指标中选择最多 **8 个**最相关的指标，为给定的 A 股标的提供技术面分析。选择时应注重指标间的互补性，避免冗余。
+            f"""你是一位专注于 A 股市场的技术分析师。你的任务是从以下技术指标中选择最多 **8 个**最相关的指标，为给定标的提供技术面分析。选择时应注重指标间的互补性，避免冗余。
 
 ⚠️ A 股市场特殊规则（分析时必须纳入考量）：
 - **涨跌停制度**：主板 ±10%，科创板/创业板 ±20%，北交所 ±30%。**风险警示股(ST/*ST)不另设更窄的限制**——主板 ST/*ST 已于 2026-07-06 起由 ±5% 调整为 ±10%，与主板普通股一致；科创板/创业板的 ST/*ST 一直是 ±20%，不因戴帽收窄。**新股上市前 5 个交易日不设涨跌幅限制**（北交所为上市首日），分析次新股时尤须注意。触及涨跌停后流动性骤降，技术指标可能失真。
@@ -68,6 +74,12 @@ MACD 类：
 3. 近 5 日平均成交量 vs 近 20 日平均成交量（判断放量/缩量）
 4. 至少 3 个技术指标的当前数值和多空信号
 5. 关键支撑位和阻力位"""
+            + (
+                "\n6. ETF 模式下，若标的上下文给出跟踪指数代码，也调用同一行情工具"
+                "比较区间走势；无法取得时明确标注，不能猜测跟踪偏离。"
+                if state.get("analysis_mode") == "etf"
+                else ""
+            )
             + get_language_instruction()
         )
 
@@ -80,7 +92,7 @@ MACD 类：
                     " If you are unable to fully answer, that's OK; another assistant with different tools"
                     " will help where you left off. Execute what you can to make progress."
                     " You have access to the following tools: {tool_names}.\n{system_message}"
-                    "For your reference, the current date is {current_date}. {instrument_context}",
+                    "For your reference, the current date is {current_date}. {instrument_context}\n{evidence_lexicon}",
                 ),
                 MessagesPlaceholder(variable_name="messages"),
             ]
@@ -90,6 +102,7 @@ MACD 类：
         prompt = prompt.partial(tool_names=", ".join([tool.name for tool in tools]))
         prompt = prompt.partial(current_date=current_date)
         prompt = prompt.partial(instrument_context=instrument_context)
+        prompt = prompt.partial(evidence_lexicon=evidence_lexicon)
 
         chain = prompt | llm.bind_tools(tools)
 

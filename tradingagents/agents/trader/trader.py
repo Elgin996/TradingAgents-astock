@@ -7,7 +7,11 @@ import functools
 from langchain_core.messages import AIMessage
 
 from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
-from tradingagents.agents.utils.agent_utils import build_instrument_context, get_language_instruction
+from tradingagents.agents.utils.agent_utils import (
+    build_evidence_lexicon,
+    build_instrument_context,
+    get_language_instruction,
+)
 from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
@@ -26,7 +30,12 @@ def create_trader(llm):
 
     def trader_node(state, name):
         company_name = state["company_of_interest"]
-        instrument_context = build_instrument_context(company_name)
+        instrument_context = build_instrument_context(
+            company_name, state.get("instrument_profile")
+        )
+        evidence_lexicon = build_evidence_lexicon(
+            state.get("analysis_mode", "stock"), state.get("analysis_capabilities")
+        )
         investment_plan = state["investment_plan"]
 
         # Collect A-stock specific analyst reports
@@ -43,6 +52,18 @@ def create_trader(llm):
         if lockup_report:
             astock_context_parts.append(f"Lockup Expiry / Insider Reduction Report:\n{lockup_report}")
         astock_context = "\n\n".join(astock_context_parts)
+        mode_rules = (
+            "For this ETF, use only its technical, liquidity, fund-structure and "
+            "index-news evidence. Apply the T+1, lot size, and price limit values "
+            "from the instrument context; do not use company-specific reports."
+            if state.get("analysis_mode") == "etf"
+            else "Apply the A-share stock constraints and stock analyst reports."
+        )
+        analyst_description = (
+            "ETF technical, liquidity, structure, and index-news specialists"
+            if state.get("analysis_mode") == "etf"
+            else "market, sentiment, news, fundamentals, policy, capital flow, and lockup/reduction specialists"
+        )
 
         messages = [
             {
@@ -64,6 +85,7 @@ def create_trader(llm):
                     "09:30-11:30 / 13:00-14:57, closing auction 14:57-15:00, after-hours "
                     "fixed-price session 15:05-15:30 (all A-shares since 2026-07-06)\n"
                     "Anchor your reasoning in the analysts' reports and the research plan. "
+                    f"{mode_rules} Evidence constraints: {evidence_lexicon} "
                     f"{_NO_LEVELS_INSTRUCTION} "
                     "（以上参数仅供技术研究参考，不构成投资建议）"
                 ),
@@ -71,9 +93,8 @@ def create_trader(llm):
             {
                 "role": "user",
                 "content": (
-                    f"Based on a comprehensive analysis by a team of analysts (including market, "
-                    f"sentiment, news, fundamentals, policy, capital flow, and lockup/reduction "
-                    f"specialists), here is an investment plan for {company_name}.\n\n"
+                    f"Based on a comprehensive analysis by {analyst_description}, "
+                    f"here is an investment plan for {company_name}.\n\n"
                     f"{instrument_context}\n\n"
                     f"Proposed Investment Plan:\n{investment_plan}\n\n"
                     + (f"Additional A-Stock Analyst Context:\n{astock_context}\n\n" if astock_context else "")

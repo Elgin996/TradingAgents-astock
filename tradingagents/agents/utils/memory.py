@@ -3,6 +3,7 @@
 from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
+import json
 import re
 
 from tradingagents.agents.utils.rating import parse_rating
@@ -17,6 +18,7 @@ class TradingMemoryLog:
     # Precompiled patterns — avoids re-compilation on every load_entries() call
     _DECISION_RE = re.compile(r"DECISION:\n(.*?)(?=\nREFLECTION:|\Z)", re.DOTALL)
     _REFLECTION_RE = re.compile(r"REFLECTION:\n(.*?)$", re.DOTALL)
+    _META_RE = re.compile(r"<!-- ETF_META:(.*?) -->", re.DOTALL)
 
     def __init__(self, config: dict = None):
         cfg = config or {}
@@ -40,6 +42,9 @@ class TradingMemoryLog:
         ticker: str,
         trade_date: str,
         final_trade_decision: str,
+        analysis_mode: str = "stock",
+        tracking_index_code: str | None = None,
+        tracking_index_name: str | None = None,
     ) -> None:
         """Append pending entry at end of propagate(). No LLM call."""
         if not self._log_path:
@@ -53,7 +58,18 @@ class TradingMemoryLog:
                         return
             rating = parse_rating(final_trade_decision)
             tag = f"[{trade_date} | {ticker} | {rating} | pending]"
-            entry = f"{tag}\n\nDECISION:\n{final_trade_decision}{self._SEPARATOR}"
+            meta = json.dumps(
+                {
+                    "analysis_mode": analysis_mode,
+                    "tracking_index_code": tracking_index_code,
+                    "tracking_index_name": tracking_index_name,
+                },
+                ensure_ascii=False,
+            )
+            entry = (
+                f"{tag}\n\nDECISION:\n{final_trade_decision}\n\n"
+                f"<!-- ETF_META:{meta} -->{self._SEPARATOR}"
+            )
             with open(self._log_path, "a", encoding="utf-8") as f:
                 f.write(entry)
             # Expire stale pending entries so the file cannot grow forever (F7.3).
@@ -84,6 +100,8 @@ class TradingMemoryLog:
         n_same: int = 5,
         n_cross: int = 3,
         before_date: str | None = None,
+        analysis_mode: str = "stock",
+        tracking_index_code: str | None = None,
     ) -> str:
         """Return formatted past context string for agent prompt injection.
 
@@ -99,11 +117,23 @@ class TradingMemoryLog:
 
         same, cross = [], []
         for e in reversed(entries):
+            if analysis_mode == "etf" and (
+                e.get("analysis_mode") != "etf"
+                or (
+                    tracking_index_code
+                    and e.get("tracking_index_code") != tracking_index_code
+                )
+            ):
+                continue
             if len(same) >= n_same and len(cross) >= n_cross:
                 break
             if e["ticker"] == ticker and len(same) < n_same:
                 same.append(e)
-            elif e["ticker"] != ticker and len(cross) < n_cross:
+            elif (
+                analysis_mode != "etf"
+                and e["ticker"] != ticker
+                and len(cross) < n_cross
+            ):
                 cross.append(e)
 
         if not same and not cross:
@@ -344,7 +374,18 @@ class TradingMemoryLog:
         body = "\n".join(lines[1:]).strip()
         decision_match = self._DECISION_RE.search(body)
         reflection_match = self._REFLECTION_RE.search(body)
-        entry["decision"] = decision_match.group(1).strip() if decision_match else ""
+        meta_match = self._META_RE.search(body)
+        try:
+            metadata = json.loads(meta_match.group(1).strip()) if meta_match else {}
+        except json.JSONDecodeError:
+            metadata = {}
+        entry["analysis_mode"] = metadata.get("analysis_mode", "stock")
+        entry["tracking_index_code"] = metadata.get("tracking_index_code")
+        entry["tracking_index_name"] = metadata.get("tracking_index_name")
+        entry["decision"] = (
+            self._META_RE.sub("", decision_match.group(1)).strip()
+            if decision_match else ""
+        )
         entry["reflection"] = reflection_match.group(1).strip() if reflection_match else ""
         return entry
 

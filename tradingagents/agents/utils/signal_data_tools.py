@@ -1,5 +1,6 @@
 from langchain_core.tools import tool
 from typing import Annotated
+from tradingagents.dataflows.capability_guard import assert_tool_allowed
 from tradingagents.dataflows.interface import route_to_vendor
 
 
@@ -16,6 +17,7 @@ def get_profit_forecast(
     Returns:
         str: Consensus forecast report with valuation metrics
     """
+    assert_tool_allowed("get_profit_forecast")
     return route_to_vendor("get_profit_forecast", ticker)
 
 
@@ -33,6 +35,7 @@ def get_hot_stocks(
     Returns:
         str: Hot stocks list with reason tags and theme frequency
     """
+    assert_tool_allowed("get_hot_stocks")
     return route_to_vendor("get_hot_stocks", curr_date)
 
 
@@ -54,6 +57,7 @@ def get_northbound_flow(
     Returns:
         str: Northbound capital flow report with bullish/bearish signal
     """
+    assert_tool_allowed("get_northbound_flow")
     return route_to_vendor("get_northbound_flow", curr_date, include_history)
 
 
@@ -71,6 +75,7 @@ def get_concept_blocks(
     Returns:
         str: Concept and sector block membership with daily changes
     """
+    assert_tool_allowed("get_concept_blocks")
     return route_to_vendor("get_concept_blocks", ticker)
 
 
@@ -94,6 +99,7 @@ def get_fund_flow(
     Returns:
         str: Fund flow report with main force signal
     """
+    assert_tool_allowed("get_fund_flow")
     return route_to_vendor("get_fund_flow", ticker, curr_date, include_history)
 
 
@@ -114,6 +120,7 @@ def get_dragon_tiger_board(
     Returns:
         str: LHB appearances with seat details and institutional activity
     """
+    assert_tool_allowed("get_dragon_tiger_board")
     return route_to_vendor("get_dragon_tiger_board", ticker, curr_date, look_back_days)
 
 
@@ -134,6 +141,7 @@ def get_lockup_expiry(
     Returns:
         str: Lockup expiry schedule with impact assessment
     """
+    assert_tool_allowed("get_lockup_expiry")
     return route_to_vendor("get_lockup_expiry", ticker, curr_date, forward_days)
 
 
@@ -152,4 +160,5 @@ def get_industry_comparison(
     Returns:
         str: Industry performance ranking with key metrics
     """
+    assert_tool_allowed("get_industry_comparison")
     return route_to_vendor("get_industry_comparison", ticker, curr_date)

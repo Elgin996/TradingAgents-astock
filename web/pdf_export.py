@@ -560,7 +560,16 @@ def _collect_sections(
     """
     sections: list[tuple[str, str]] = []
 
-    for key, title in _REPORT_SECTIONS:
+    report_sections = _REPORT_SECTIONS
+    if final_state.get("analysis_mode") == "etf":
+        report_sections = [
+            ("market_report", "ETF 技术分析"),
+            ("etf_liquidity_report", "流动性与交易"),
+            ("etf_profile_report", "ETF 结构、份额与规模"),
+            ("etf_index_news_report", "指数新闻与政策"),
+            ("data_quality_summary", "数据质量与不可得数据"),
+        ]
+    for key, title in report_sections:
         content = final_state.get(key, "")
         if content:
             text = _strip_think(str(content))
@@ -649,10 +658,12 @@ def generate_markdown(final_state: dict[str, Any], ticker: str, trade_date: str,
     font (common on minimal Linux/Windows installs).
     """
     ticker_label = stock_display_label(ticker, final_state)
+    is_etf = final_state.get("analysis_mode") == "etf"
+    profile = final_state.get("instrument_profile") or {}
     out = [
-        "# A股多Agent投研分析报告",
+        "# A股ETF多Agent投研分析报告" if is_etf else "# A股多Agent投研分析报告",
         "",
-        f"- **股票代码**：{ticker_label}",
+        f"- **{'ETF代码' if is_etf else '股票代码'}**：{ticker_label}",
         f"- **分析日期**：{trade_date}",
         f"- **生成时间**：{datetime.now().strftime('%Y-%m-%d %H:%M')}",
         f"- **交易信号**：**{signal.upper()}**",
@@ -664,6 +675,18 @@ def generate_markdown(final_state: dict[str, Any], ticker: str, trade_date: str,
         "---",
         "",
     ]
+    if is_etf:
+        out.extend([
+            f"- **跟踪指数**：{profile.get('tracking_index_name', '未提供')}",
+            f"- **实际能力**：{', '.join(final_state.get('analysis_capabilities', []))}",
+            "- **不可得数据**：" + "；".join(
+                f"{name}（{reason}）"
+                for name, reason in (
+                    final_state.get("analysis_unavailable_capabilities") or {}
+                ).items()
+            ),
+            "",
+        ])
     for title, content in _collect_sections(final_state, ticker):
         out.append(f"## {title}")
         out.append("")

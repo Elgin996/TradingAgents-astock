@@ -75,6 +75,19 @@ class ConditionalLogic:
             return "tools_lockup"
         return "Msg Clear Lockup"
 
+    def _should_continue_etf_analyst(self, state: AgentState, name: str):
+        last_message = state["messages"][-1]
+        return f"tools_{name}" if last_message.tool_calls else f"Msg Clear {name.capitalize()}"
+
+    def should_continue_etf_liquidity(self, state: AgentState):
+        return self._should_continue_etf_analyst(state, "etf_liquidity")
+
+    def should_continue_etf_structure(self, state: AgentState):
+        return self._should_continue_etf_analyst(state, "etf_structure")
+
+    def should_continue_etf_index_news(self, state: AgentState):
+        return self._should_continue_etf_analyst(state, "etf_index_news")
+
     def should_continue_after_quality_gate(self, state: AgentState) -> str:
         """Halt the graph when quality gate failed and policy is block."""
         if state.get("data_quality_failed") and self.quality_gate_policy == "block":

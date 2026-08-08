@@ -37,6 +37,7 @@ from .utils import safe_ticker_component
 from tradingagents.utils.file_lock import FileLock
 
 logger = logging.getLogger(__name__)
+_SH_INDEX_CODES = frozenset({"000016", "000300", "000905", "000852", "000688"})
 
 
 # ---------------------------------------------------------------------------
@@ -44,20 +45,24 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _get_prefix(code: str) -> str:
-    """6-digit A-stock code -> market prefix for Tencent API.
+    """6-digit mainland security code -> market prefix for quote APIs.
 
     The 92 prefix must be checked before the leading-9 rule: the Beijing Stock
     Exchange started issuing 920xxx codes for new listings in October 2024, and
     a bare ``startswith("9")`` routes them to Shanghai, where the Tencent quote
     endpoint returns an empty payload (issue #85).  Only 900xxx (Shanghai B
-    shares) legitimately belongs to ``sh``.
+    shares) legitimately belongs to ``sh``.  Shanghai-listed ETFs use the
+    5xxxxx range; treating them as Shenzhen causes invalid Tencent, Eastmoney,
+    and Sina symbols.
     """
     if code.startswith("92"):
         return "bj"
-    if code.startswith(("6", "9")):
-        return "sh"
-    elif code.startswith("8"):
+    if code.startswith("8"):
         return "bj"
+    if code in _SH_INDEX_CODES:
+        return "sh"
+    if code.startswith(("5", "6", "9")):
+        return "sh"
     return "sz"
 
 
@@ -129,7 +134,11 @@ def _build_name_code_map() -> tuple[dict[str, str], dict[str, str]]:
             for _, row in stocks.iterrows():
                 code = str(row["code"]).strip()
                 name = str(row["name"]).strip()
-                if not _re.match(r"^(?:[036]\d{5}|8\d{5}|92\d{4})$", code):
+                # mootdx's security list includes Shanghai ETF codes (5xxxxx)
+                # and Shenzhen ETF codes (159xxx).  Keep these in the shared
+                # name map so name-based resolution has the same coverage as
+                # direct-code input.
+                if not _re.match(r"^(?:[0356]\d{5}|8\d{5}|92\d{4}|159\d{3})$", code):
                     continue
                 clean_name = name.replace(" ", "").replace("　", "")
                 n2c[clean_name] = code
@@ -546,13 +555,24 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
     from .config import get_config
 
     code = _normalize_ticker(symbol)
+    from .capability_guard import active_capabilities
+    is_etf_run = active_capabilities() is not None
     config = get_config()
     cache_dir = config.get(
         "data_cache_dir", os.path.expanduser("~/.tradingagents/cache")
     )
     os.makedirs(cache_dir, exist_ok=True)
 
-    cache_file = os.path.join(cache_dir, f"{code}-astock-daily.csv")
+    # Exchange is part of the cache identity: a same-looking code routed to a
+    # different market must never reuse incompatible OHLCV data.
+    cache_file = os.path.join(
+        cache_dir, f"{_get_prefix(code)}-{code}-astock-daily.csv"
+    )
+    legacy_cache_file = os.path.join(cache_dir, f"{code}-astock-daily.csv")
+    if not os.path.exists(cache_file) and os.path.exists(legacy_cache_file):
+        # Read legacy stock caches once for backward compatibility; subsequent
+        # refreshes are written under the exchange-qualified key.
+        cache_file = legacy_cache_file
 
     if os.path.exists(cache_file):
         mtime = datetime.fromtimestamp(os.path.getmtime(cache_file))
@@ -567,38 +587,48 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
             cutoff = pd.to_datetime(curr_date)
             return data[data["Date"] <= cutoff]
 
+    # Phase-1 ETF mode uses Sina first because mootdx commonly returns empty
+    # ETF bars. Stocks retain the existing mootdx-first route.
+    if is_etf_run:
+        try:
+            df = _sina_kline_fallback(code)
+            if df.empty:
+                raise ValueError(f"No OHLCV data from Sina for ETF {code}")
+        except Exception as exc:
+            raise ValueError(f"No OHLCV data from Sina for ETF {code}") from exc
     # Fetch from mootdx — 800 daily bars (~3 years of trading days)
-    try:
-        client = _get_mootdx_client()
-        df = client.bars(symbol=code, category=4, offset=800)
+    elif not is_etf_run:
+        try:
+            client = _get_mootdx_client()
+            df = client.bars(symbol=code, category=4, offset=800)
 
-        if df is None or df.empty:
-            raise ValueError(f"No OHLCV data from mootdx for {code}")
+            if df is None or df.empty:
+                raise ValueError(f"No OHLCV data from mootdx for {code}")
 
-        # mootdx returns index named 'datetime' AND a column named 'datetime'
+            # mootdx returns index named 'datetime' AND a column named 'datetime'
         # (plus year/month/day/hour/minute/volume). Drop duplicates before reset.
-        df = df.drop(columns=["datetime", "year", "month", "day", "hour", "minute"], errors="ignore")
-        df = df.reset_index()  # moves index 'datetime' → column 'datetime'
-        rename_map = {
+            df = df.drop(columns=["datetime", "year", "month", "day", "hour", "minute"], errors="ignore")
+            df = df.reset_index()  # moves index 'datetime' → column 'datetime'
+            rename_map = {
             "datetime": "Date",
             "open": "Open",
             "close": "Close",
             "high": "High",
             "low": "Low",
             "volume": "Volume",
-        }
-        df = df.rename(columns=rename_map)
-        df = df[["Date", "Open", "High", "Low", "Close", "Volume"]]
-        df = _normalize_ohlcv_dates(df)
-    except Exception as e:
-        logger.warning("mootdx OHLCV failed for %s: %s, trying sina HTTP fallback", code, e)
-        # Fallback: Sina direct HTTP API
-        try:
-            df = _sina_kline_fallback(code)
-            if df.empty:
-                raise ValueError(f"No OHLCV data from sina for {code}")
-        except Exception:
-            raise ValueError(f"No OHLCV data from mootdx/sina for {code}")
+            }
+            df = df.rename(columns=rename_map)
+            df = df[["Date", "Open", "High", "Low", "Close", "Volume"]]
+            df = _normalize_ohlcv_dates(df)
+        except Exception as e:
+            logger.warning("mootdx OHLCV failed for %s: %s, trying sina HTTP fallback", code, e)
+            # Fallback: Sina direct HTTP API
+            try:
+                df = _sina_kline_fallback(code)
+                if df.empty:
+                    raise ValueError(f"No OHLCV data from sina for {code}")
+            except Exception:
+                raise ValueError(f"No OHLCV data from mootdx/sina for {code}")
 
     df, _ = _supplement_stale_ohlcv_with_sina(code, df, curr_date, start_date=None)
 
@@ -697,21 +727,32 @@ def get_stock_data(
     """Get OHLCV stock price data via mootdx."""
     code = _normalize_ticker(symbol)
 
+    from .capability_guard import active_capabilities
+    is_etf_run = active_capabilities() is not None
     data_source = "mootdx (TCP)"
-    try:
-        client = _get_mootdx_client()
-        df = client.bars(symbol=code, category=4, offset=800)
+    if is_etf_run:
+        try:
+            df = _sina_kline_fallback(code, start_date, end_date)
+            if df.empty:
+                return "K线数据获取失败：ETF 新浪数据源未返回数据，请检查网络连接"
+            data_source = "sina HTTP (ETF primary)"
+        except Exception:
+            return "K线数据获取失败：ETF 新浪数据源不可用，请检查网络连接"
+    else:
+        try:
+            client = _get_mootdx_client()
+            df = client.bars(symbol=code, category=4, offset=800)
 
-        if df is None or df.empty:
-            raise ValueError(f"No data from mootdx for {code}")
+            if df is None or df.empty:
+                raise ValueError(f"No data from mootdx for {code}")
 
-        # Drop duplicate datetime column + extra columns before reset_index
-        df = df.drop(
+            # Drop duplicate datetime column + extra columns before reset_index
+            df = df.drop(
             columns=["datetime", "year", "month", "day", "hour", "minute"],
             errors="ignore",
-        )
-        df = df.reset_index()  # index 'datetime' → column 'datetime'
-        df = df.rename(
+            )
+            df = df.reset_index()  # index 'datetime' → column 'datetime'
+            df = df.rename(
             columns={
                 "datetime": "Date",
                 "open": "Open",
@@ -721,19 +762,19 @@ def get_stock_data(
                 "volume": "Volume",
                 "amount": "Amount",
             }
-        )
-        df = _normalize_ohlcv_dates(df)
+            )
+            df = _normalize_ohlcv_dates(df)
 
-    except Exception as e:
-        logger.warning("mootdx K-line failed for %s: %s, trying sina HTTP fallback", code, e)
-        # Fallback: Sina direct HTTP API
-        try:
-            df = _sina_kline_fallback(code, start_date, end_date)
-            if df.empty:
+        except Exception as e:
+            logger.warning("mootdx K-line failed for %s: %s, trying sina HTTP fallback", code, e)
+            # Fallback: Sina direct HTTP API
+            try:
+                df = _sina_kline_fallback(code, start_date, end_date)
+                if df.empty:
+                    return "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
+                data_source = "sina HTTP (fallback)"
+            except Exception:
                 return "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
-            data_source = "sina HTTP (fallback)"
-        except Exception:
-            return "K线数据获取失败：mootdx和新浪备用源均不可用，请检查网络连接"
 
     df, supplemented = _supplement_stale_ohlcv_with_sina(code, df, end_date, start_date)
     if supplemented:
@@ -759,7 +800,8 @@ def get_stock_data(
         index=False
     )
 
-    header = f"# Stock data for {code} (A-stock) from {start_date} to {end_date}\n"
+    instrument_name = "ETF" if is_etf_run else "Stock"
+    header = f"# {instrument_name} data for {code} (A-share) from {start_date} to {end_date}\n"
     header += f"# Total records: {len(df)}\n"
     header += f"# Data source: {data_source}\n"
     header += (

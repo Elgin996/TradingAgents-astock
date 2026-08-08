@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
 from tradingagents.agents.utils.agent_utils import (
+    build_evidence_lexicon,
     build_instrument_context,
     get_language_instruction,
 )
@@ -33,7 +34,19 @@ def create_portfolio_manager(llm):
     structured_llm = bind_structured(llm, PortfolioDecision, "Portfolio Manager")
 
     def portfolio_manager_node(state) -> dict:
-        instrument_context = build_instrument_context(state["company_of_interest"])
+        instrument_context = build_instrument_context(
+            state["company_of_interest"], state.get("instrument_profile")
+        )
+        evidence_lexicon = build_evidence_lexicon(
+            state.get("analysis_mode", "stock"), state.get("analysis_capabilities")
+        )
+        mode_rules = (
+            "ETF decision: rely on index trend, liquidity, disclosed fund structure "
+            "and policy/news. Do not cite company financials, management, lockups, "
+            "or insider activity."
+            if state.get("analysis_mode") == "etf"
+            else "Stock decision: consider the applicable A-share stock constraints."
+        )
 
         history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
@@ -50,6 +63,9 @@ def create_portfolio_manager(llm):
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
 {instrument_context}
+
+{mode_rules}
+Evidence constraints: {evidence_lexicon}
 
 ---
 

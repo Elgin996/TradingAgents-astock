@@ -51,6 +51,12 @@ def _completed_key(ticker: str, trade_date: str) -> tuple[str, str]:
     return ticker.upper(), trade_date
 
 
+def _incomplete_key(
+    ticker: str, trade_date: str, analysis_mode: str = "stock"
+) -> tuple[str, str, str]:
+    return ticker.upper(), trade_date, analysis_mode
+
+
 def _completed_keys() -> set[tuple[str, str]]:
     return {
         _completed_key(entry["ticker"], entry["date"])
@@ -101,11 +107,15 @@ def _save_incomplete_index(entries: list[dict[str, Any]]) -> None:
     tmp.replace(_INCOMPLETE_TASKS_FILE)
 
 
-def _checkpoint_step(ticker: str, trade_date: str) -> int | None:
+def _checkpoint_step(
+    ticker: str, trade_date: str, analysis_mode: str = "stock"
+) -> int | None:
     try:
         from tradingagents.graph.checkpointer import checkpoint_step
 
-        return checkpoint_step(DEFAULT_CONFIG["data_cache_dir"], ticker, trade_date)
+        return checkpoint_step(
+            DEFAULT_CONFIG["data_cache_dir"], ticker, trade_date, analysis_mode
+        )
     except Exception:
         return None
 
@@ -117,6 +127,8 @@ def record_incomplete_task(
     status: str,
     error: str | None = None,
     completed_stages: list[str] | None = None,
+    analysis_mode: str = "stock",
+    instrument_profile: dict[str, Any] | None = None,
 ) -> None:
     """Upsert a resumable task entry."""
     ticker = ticker.strip().upper()
@@ -128,8 +140,12 @@ def record_incomplete_task(
         entries = [
             entry
             for entry in _load_incomplete_index()
-            if _completed_key(entry["ticker"], entry["trade_date"])
-            != _completed_key(ticker, trade_date)
+            if _incomplete_key(
+                entry["ticker"],
+                entry["trade_date"],
+                entry.get("analysis_mode", "stock"),
+            )
+            != _incomplete_key(ticker, trade_date, analysis_mode)
         ]
         now = time.time()
         entries.append(
@@ -139,6 +155,8 @@ def record_incomplete_task(
                 "status": status,
                 "error": error or "",
                 "completed_stages": completed_stages or [],
+                "analysis_mode": analysis_mode,
+                "instrument_profile": instrument_profile,
                 "updated_at": now,
             }
         )
@@ -146,7 +164,9 @@ def record_incomplete_task(
         _save_incomplete_index(entries)
 
 
-def clear_incomplete_task(ticker: str, trade_date: str) -> None:
+def clear_incomplete_task(
+    ticker: str, trade_date: str, analysis_mode: str = "stock"
+) -> None:
     """Remove an incomplete task once it completes successfully."""
     ticker = ticker.strip().upper()
     trade_date = trade_date.strip()
@@ -154,8 +174,12 @@ def clear_incomplete_task(ticker: str, trade_date: str) -> None:
         entries = [
             entry
             for entry in _load_incomplete_index()
-            if _completed_key(entry["ticker"], entry["trade_date"])
-            != _completed_key(ticker, trade_date)
+            if _incomplete_key(
+                entry["ticker"],
+                entry["trade_date"],
+                entry.get("analysis_mode", "stock"),
+            )
+            != _incomplete_key(ticker, trade_date, analysis_mode)
         ]
         _save_incomplete_index(entries)
 
@@ -172,7 +196,11 @@ def get_incomplete_history() -> list[dict[str, Any]]:
             if key in completed:
                 continue
 
-            step = _checkpoint_step(entry["ticker"], entry["trade_date"])
+            step = _checkpoint_step(
+                entry["ticker"],
+                entry["trade_date"],
+                entry.get("analysis_mode", "stock"),
+            )
             entry["checkpoint_step"] = step
             active_entries.append(entry)
 

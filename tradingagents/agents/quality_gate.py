@@ -18,7 +18,17 @@ ANALYST_NAMES = {
     "policy": "政策分析师",
     "hot_money": "游资追踪师",
     "lockup": "解禁监控师",
+    "etf_liquidity": "ETF流动性分析师",
+    "etf_structure": "ETF结构分析师",
+    "etf_index_news": "指数新闻与政策分析师",
 }
+ETF_REPORT_FIELDS = {
+    "market": "market_report",
+    "etf_liquidity": "etf_liquidity_report",
+    "etf_structure": "etf_profile_report",
+    "etf_index_news": "etf_index_news_report",
+}
+ETF_FORBIDDEN_TERMS = ("公司营收", "净利润", "董监高", "解禁", "限售", "龙虎榜")
 
 MIN_REPORT_LENGTH = 200
 
@@ -31,12 +41,16 @@ FAILURE_MARKERS = [
 ]
 
 
-def _hard_check_report(analyst_type: str, report: str) -> tuple:
+def _hard_check_report(
+    analyst_type: str, report: str, analysis_mode: str = "stock"
+) -> tuple:
     """Run hard checks on a single report. Returns (grade, detail)."""
     if not report or not report.strip():
         return ("F", "报告为空")
 
     length = len(report.strip())
+    if analysis_mode == "etf" and any(term in report for term in ETF_FORBIDDEN_TERMS):
+        return ("F", "ETF 报告包含禁止的个股逻辑")
     if length < MIN_REPORT_LENGTH:
         return ("D", f"报告过短 ({length} chars < {MIN_REPORT_LENGTH})")
 
@@ -123,7 +137,7 @@ def _build_review_prompt(
 """
 
 
-def create_quality_gate(llm, selected_analysts=None):
+def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock"):
     """Factory for the data quality gate node.
 
     Sits between the last analyst Msg Clear and Bull Researcher.
@@ -131,9 +145,10 @@ def create_quality_gate(llm, selected_analysts=None):
     Only grades analysts that were selected for the run.
     Writes data_quality_summary and data_quality_failed to state.
     """
+    source_fields = ETF_REPORT_FIELDS if analysis_mode == "etf" else REPORT_FIELDS
     fields = {
         k: v
-        for k, v in REPORT_FIELDS.items()
+        for k, v in source_fields.items()
         if selected_analysts is None or k in selected_analysts
     }
     threshold = _fail_threshold(len(fields)) if fields else 2
@@ -141,6 +156,7 @@ def create_quality_gate(llm, selected_analysts=None):
     def quality_gate_node(state) -> dict:
         trade_date = state["trade_date"]
         ticker = state["company_of_interest"]
+        unavailable = state.get("analysis_unavailable_capabilities", {})
 
         reports = {}
         for analyst_type, field in fields.items():
@@ -148,7 +164,9 @@ def create_quality_gate(llm, selected_analysts=None):
 
         hard_results = {}
         for analyst_type, field in fields.items():
-            grade, detail = _hard_check_report(analyst_type, reports[field])
+            grade, detail = _hard_check_report(
+                analyst_type, reports[field], analysis_mode
+            )
             hard_results[analyst_type] = (grade, detail)
 
         hard_summary_lines = []
@@ -183,6 +201,11 @@ def create_quality_gate(llm, selected_analysts=None):
             f"### 门控判定\n"
             f"**{verdict}** — {fail_count} 项硬检查未达标，阈值为 {threshold} 项。\n"
         )
+        if unavailable:
+            summary += "\n### 不可得数据\n" + "\n".join(
+                f"- {capability}: {reason}"
+                for capability, reason in unavailable.items()
+            ) + "\n"
 
         return {
             "data_quality_summary": summary,

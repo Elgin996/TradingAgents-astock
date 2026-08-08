@@ -22,8 +22,23 @@ PIPELINE_STAGES: list[dict[str, str]] = [
     {"id": "risk", "name": "风控评估", "icon": "🛡️", "report_key": "risk_debate_state"},
     {"id": "pm", "name": "最终决策", "icon": "👔", "report_key": "final_trade_decision"},
 ]
+ETF_PIPELINE_STAGES: list[dict[str, str]] = [
+    {"id": "market", "name": "技术分析", "icon": "📊", "report_key": "market_report"},
+    {"id": "etf_liquidity", "name": "流动性", "icon": "💧", "report_key": "etf_liquidity_report"},
+    {"id": "etf_structure", "name": "ETF结构", "icon": "🏷️", "report_key": "etf_profile_report"},
+    {"id": "etf_index_news", "name": "指数新闻政策", "icon": "📰", "report_key": "etf_index_news_report"},
+    {"id": "quality_gate", "name": "质量门控", "icon": "✅", "report_key": "data_quality_summary"},
+    {"id": "debate", "name": "多空辩论", "icon": "⚔️", "report_key": "investment_plan"},
+    {"id": "trader", "name": "交易决策", "icon": "💹", "report_key": "trader_investment_plan"},
+    {"id": "risk", "name": "风控评估", "icon": "🛡️", "report_key": "risk_debate_state"},
+    {"id": "pm", "name": "最终决策", "icon": "👔", "report_key": "final_trade_decision"},
+]
 
 STAGE_IDS = [s["id"] for s in PIPELINE_STAGES]
+
+
+def stages_for(analysis_mode: str) -> list[dict[str, str]]:
+    return ETF_PIPELINE_STAGES if analysis_mode == "etf" else PIPELINE_STAGES
 
 
 @dataclass
@@ -32,6 +47,8 @@ class ProgressTracker:
 
     ticker: str = ""
     trade_date: str = ""
+    analysis_mode: str = "stock"
+    instrument_profile: dict[str, Any] | None = None
     start_time: float = field(default_factory=time.time)
 
     is_running: bool = False

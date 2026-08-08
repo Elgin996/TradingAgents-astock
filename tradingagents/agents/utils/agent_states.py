@@ -1,4 +1,4 @@
-from typing import Annotated
+from typing import Annotated, Any
 from typing_extensions import TypedDict
 from langgraph.graph import MessagesState
 
@@ -46,6 +46,13 @@ class RiskDebateState(TypedDict):
 class AgentState(MessagesState):
     company_of_interest: Annotated[str, "Company that we are interested in trading"]
     trade_date: Annotated[str, "What date we are trading at"]
+    analysis_mode: Annotated[str, "Stock or ETF analysis mode"]
+    instrument_profile: Annotated[dict[str, Any] | None, "Frozen instrument profile"]
+    analysis_capabilities: Annotated[list[str], "Capabilities available in this run"]
+    analysis_unavailable_capabilities: Annotated[
+        dict[str, str], "Unavailable capabilities and auditable reasons"
+    ]
+    report_schema_version: Annotated[str, "Report schema version"]
 
     sender: Annotated[str, "Agent that sent this message"]
 
@@ -59,6 +66,9 @@ class AgentState(MessagesState):
     policy_report: Annotated[str, "Report from the Policy Analyst (A-stock specific)"]
     hot_money_report: Annotated[str, "Report from the Hot Money Tracker (A-stock specific)"]
     lockup_report: Annotated[str, "Report from the Lockup/Reduction Watcher (A-stock specific)"]
+    etf_liquidity_report: Annotated[str, "ETF liquidity and trading report"]
+    etf_profile_report: Annotated[str, "ETF structure and shares/AUM report"]
+    etf_index_news_report: Annotated[str, "ETF index news and policy report"]
 
     # data quality gate
     data_quality_summary: Annotated[str, "Quality gate assessment of all analyst reports (hard checks + LLM review)"]

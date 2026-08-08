@@ -1,4 +1,9 @@
-
+from tradingagents.agents.utils.agent_utils import (
+    build_analysis_report_context,
+    build_debate_framework,
+    build_evidence_lexicon,
+    build_instrument_context,
+)
 
 def create_bull_researcher(llm):
     def bull_node(state) -> dict:
@@ -15,15 +20,28 @@ def create_bull_researcher(llm):
         hot_money_report = state.get("hot_money_report", "")
         lockup_report = state.get("lockup_report", "")
         data_quality_summary = state.get("data_quality_summary", "")
+        instrument_context = build_instrument_context(
+            state["company_of_interest"], state.get("instrument_profile")
+        )
+        evidence_lexicon = build_evidence_lexicon(
+            state.get("analysis_mode", "stock"), state.get("analysis_capabilities")
+        )
+        debate_framework = build_debate_framework(
+            state.get("analysis_mode", "stock"), "bull"
+        )
+        report_context = build_analysis_report_context(state)
+        etf_reports = (
+            f"ETF liquidity report: {state.get('etf_liquidity_report', '')}\n"
+            f"ETF structure report: {state.get('etf_profile_report', '')}\n"
+            f"Index news/policy report: {state.get('etf_index_news_report', '')}"
+        )
 
-        prompt = f"""You are a Bull Analyst advocating for investing in this A-share (China mainland) stock. Your task is to build a strong, evidence-based case emphasizing growth potential, competitive advantages, and positive market indicators. Leverage the provided research and data to address concerns and counter bearish arguments effectively.
+        prompt = f"""You are a Bull Analyst building a strong, evidence-based investment case. Use only evidence appropriate for the identified instrument and address bearish arguments directly.
 
-A-Share Bull Framework — prioritize these China-specific bullish catalysts:
-- Policy Tailwinds: Government subsidies, industry support policies (e.g. "专精特新", national strategic sectors), favorable regulatory signals from CSRC/State Council
-- Northbound Capital (北向资金): Sustained net inflow from Hong Kong Stock Connect indicates foreign institutional conviction
-- Hot Money Momentum (游资接力): Consecutive limit-ups with volume confirmation, strong theme attribution (reason tags), sector rotation just beginning
-- Valuation Growth Story: Use forward PE, PEG, and PE digestion timeframe (30x anchor for A-stock growth stocks) to argue the current premium is justified by earnings trajectory
-- Lockup Expiry Cleared: If major lockup periods have passed or insiders are NOT reducing, this removes a key overhang
+Instrument context: {instrument_context}
+Evidence rules: {evidence_lexicon}
+
+Debate framework: {debate_framework}
 
 General bull points:
 - Growth Potential: Market opportunities, revenue projections, and scalability
@@ -33,14 +51,10 @@ General bull points:
 - Engagement: Present your argument conversationally, engaging directly with the bear analyst's points
 
 Resources available:
-Market research report: {market_research_report}
-Social media sentiment report: {sentiment_report}
-Latest news report: {news_report}
-Company fundamentals report: {fundamentals_report}
-Policy analysis report: {policy_report}
-Hot money / capital flow report: {hot_money_report}
-Lockup expiry / insider reduction report: {lockup_report}
+{report_context}
 Data quality assessment: {data_quality_summary}
+ETF reports (when applicable):
+{etf_reports}
 Conversation history of the debate: {history}
 Last bear argument: {current_response}
 

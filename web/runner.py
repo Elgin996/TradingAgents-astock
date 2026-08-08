@@ -8,7 +8,7 @@ import traceback
 from typing import Any
 
 from web.history import clear_incomplete_task, record_incomplete_task
-from web.progress import PIPELINE_STAGES, ProgressTracker
+from web.progress import PIPELINE_STAGES, ProgressTracker, stages_for
 from web.stock_display import normalize_report_state_mentions, normalize_stock_mentions
 
 
@@ -29,8 +29,10 @@ def _discard_stopped_run(
     """Clear resumable artifacts for a user-stopped run."""
     from tradingagents.graph.checkpointer import clear_checkpoint
 
-    clear_incomplete_task(ticker, trade_date)
-    clear_checkpoint(config["data_cache_dir"], ticker, trade_date)
+    clear_incomplete_task(ticker, trade_date, tracker.analysis_mode)
+    clear_checkpoint(
+        config["data_cache_dir"], ticker, trade_date, tracker.analysis_mode
+    )
     tracker.mark_stopped()
 
 
@@ -44,8 +46,13 @@ def _detect_completed_stages(
     tracker: ProgressTracker,
 ) -> None:
     """Check the streamed chunk for newly completed stages."""
-    for report_key in _ANALYST_REPORT_KEYS:
-        stage_id = _REPORT_KEY_TO_STAGE[report_key]
+    report_stages = [
+        stage for stage in stages_for(tracker.analysis_mode)
+        if stage["id"] not in {"quality_gate", "debate", "trader", "risk", "pm"}
+    ]
+    for stage in report_stages:
+        report_key = stage["report_key"]
+        stage_id = stage["id"]
         content = chunk.get(report_key, "")
         if content and tracker.stage_status(stage_id) != "done":
             report = normalize_stock_mentions(str(content), tracker.ticker, chunk)
@@ -80,19 +87,32 @@ def _detect_completed_stages(
 
 def _infer_active_stage(tracker: ProgressTracker) -> None:
     """Set the current_stage to the first non-completed stage."""
-    from web.progress import STAGE_IDS
-    for sid in STAGE_IDS:
+    for stage in stages_for(tracker.analysis_mode):
+        sid = stage["id"]
         if tracker.stage_status(sid) == "pending":
             tracker.mark_stage_active(sid)
             return
 
 
-def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker) -> None:
+def _run(
+    ticker: str,
+    trade_date: str,
+    config: dict,
+    tracker: ProgressTracker,
+    analysis_mode: str,
+    instrument_profile: dict[str, Any] | None,
+) -> None:
     """Execute the full pipeline in the current thread."""
     from cli.stats_handler import StatsCallbackHandler
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
+    from tradingagents.dataflows.capability_guard import (
+        reset_active_capabilities,
+        set_active_capabilities,
+    )
+
     stats = StatsCallbackHandler()
+    capability_token = set_active_capabilities(None)
 
     graph = TradingAgentsGraph(
         debug=True,
@@ -104,6 +124,12 @@ def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker) -
         ticker,
         trade_date,
         callbacks=[stats],
+        analysis_mode=analysis_mode,
+        instrument_profile=instrument_profile,
+    )
+    reset_active_capabilities(capability_token)
+    capability_token = set_active_capabilities(
+        graph.analysis_capabilities if analysis_mode == "etf" else None
     )
 
     last_chunk: dict[str, Any] = {}
@@ -143,6 +169,8 @@ def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker) -
                     trade_date,
                     status="paused" if tracker.is_paused else "running",
                     completed_stages=list(tracker.completed_stages),
+                    analysis_mode=analysis_mode,
+                    instrument_profile=instrument_profile,
                 )
 
             s = stats.get_stats()
@@ -164,9 +192,10 @@ def _run(ticker: str, trade_date: str, config: dict, tracker: ProgressTracker) -
             return
 
         tracker.mark_complete(last_chunk, signal)
-        clear_incomplete_task(ticker, trade_date)
+        clear_incomplete_task(ticker, trade_date, analysis_mode)
     finally:
         graph.close_graph_run()
+        reset_active_capabilities(capability_token)
 
 
 def run_analysis_in_thread(
@@ -174,10 +203,15 @@ def run_analysis_in_thread(
     trade_date: str,
     config: dict,
     tracker: ProgressTracker,
+    *,
+    analysis_mode: str = "stock",
+    instrument_profile: dict[str, Any] | None = None,
 ) -> threading.Thread:
     """Launch the pipeline in a daemon thread. Returns the thread handle."""
     tracker.ticker = ticker
     tracker.trade_date = trade_date
+    tracker.analysis_mode = analysis_mode
+    tracker.instrument_profile = instrument_profile
     tracker.is_running = True
     tracker.mark_stage_active("market")
     record_incomplete_task(
@@ -185,11 +219,20 @@ def run_analysis_in_thread(
         trade_date,
         status="running",
         completed_stages=list(tracker.completed_stages),
+        analysis_mode=analysis_mode,
+        instrument_profile=instrument_profile,
     )
 
     def _target() -> None:
         try:
-            _run(ticker, trade_date, config, tracker)
+            _run(
+                ticker,
+                trade_date,
+                config,
+                tracker,
+                analysis_mode,
+                instrument_profile,
+            )
         except Exception as exc:
             if tracker.stop_requested:
                 try:
@@ -205,6 +248,8 @@ def run_analysis_in_thread(
                     status="error",
                     error=str(exc),
                     completed_stages=list(tracker.completed_stages),
+                    analysis_mode=analysis_mode,
+                    instrument_profile=instrument_profile,
                 )
             tracker.mark_error(str(exc))
 

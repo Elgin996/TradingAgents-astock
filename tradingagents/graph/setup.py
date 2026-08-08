@@ -19,6 +19,17 @@ DEFAULT_ANALYSTS: tuple[str, ...] = (
     "hot_money",
     "lockup",
 )
+ETF_ANALYSTS: tuple[str, ...] = (
+    "market",
+    "etf_liquidity",
+    "etf_structure",
+    "etf_index_news",
+)
+
+
+def resolve_analysts(analysis_mode: str) -> tuple[str, ...]:
+    """Return the only analyst set valid for the identified instrument mode."""
+    return ETF_ANALYSTS if analysis_mode == "etf" else DEFAULT_ANALYSTS
 
 
 class GraphSetup:
@@ -38,7 +49,9 @@ class GraphSetup:
         self.conditional_logic = conditional_logic
 
     def setup_graph(
-        self, selected_analysts: Optional[Sequence[str]] = None
+        self,
+        selected_analysts: Optional[Sequence[str]] = None,
+        analysis_mode: str = "stock",
     ):
         """Set up and compile the agent workflow graph.
 
@@ -110,9 +123,32 @@ class GraphSetup:
             delete_nodes["lockup"] = create_msg_delete()
             tool_nodes["lockup"] = self.tool_nodes["lockup"]
 
+        if "etf_liquidity" in selected_analysts:
+            analyst_nodes["etf_liquidity"] = create_etf_liquidity_analyst(
+                self.quick_thinking_llm
+            )
+            delete_nodes["etf_liquidity"] = create_msg_delete()
+            tool_nodes["etf_liquidity"] = self.tool_nodes["etf_liquidity"]
+
+        if "etf_structure" in selected_analysts:
+            analyst_nodes["etf_structure"] = create_etf_structure_analyst(
+                self.quick_thinking_llm
+            )
+            delete_nodes["etf_structure"] = create_msg_delete()
+            tool_nodes["etf_structure"] = self.tool_nodes["etf_structure"]
+
+        if "etf_index_news" in selected_analysts:
+            analyst_nodes["etf_index_news"] = create_etf_index_news_analyst(
+                self.quick_thinking_llm
+            )
+            delete_nodes["etf_index_news"] = create_msg_delete()
+            tool_nodes["etf_index_news"] = self.tool_nodes["etf_index_news"]
+
         # Create quality gate node (only grade analysts that actually ran)
         quality_gate_node = create_quality_gate(
-            self.quick_thinking_llm, selected_analysts=selected_analysts
+            self.quick_thinking_llm,
+            selected_analysts=selected_analysts,
+            analysis_mode=analysis_mode,
         )
 
         # Create researcher and manager nodes

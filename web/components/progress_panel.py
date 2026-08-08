@@ -6,7 +6,7 @@ import html
 
 import streamlit as st
 
-from web.progress import PIPELINE_STAGES, ProgressTracker
+from web.progress import ProgressTracker, stages_for
 
 
 def _status_badge(status: str) -> str:
@@ -47,13 +47,15 @@ def render_progress(tracker: ProgressTracker) -> None:
     if tracker.is_paused:
         st.caption("当前分析已暂停。")
 
+    stages = stages_for(tracker.analysis_mode)
     completed = len(tracker.completed_stages)
-    total = len(PIPELINE_STAGES)
+    total = len(stages)
     pct = completed / total if total else 0
     st.progress(pct, text=f"{completed}/{total} 阶段完成  ·  {_format_time(tracker.elapsed)}")
 
-    analyst_stages = PIPELINE_STAGES[:7]
-    post_stages = PIPELINE_STAGES[7:]
+    analyst_count = 4 if tracker.analysis_mode == "etf" else 7
+    analyst_stages = stages[:analyst_count]
+    post_stages = stages[analyst_count:]
 
     st.markdown(
         '<div style="margin:0.5rem 0 0.3rem; font-size:0.85rem; color:#888;">ANALYSTS</div>',
@@ -108,7 +110,7 @@ def render_progress(tracker: ProgressTracker) -> None:
 
     completed_reports = [
         (stage["name"], stage["icon"], tracker.stage_reports[stage["id"]])
-        for stage in PIPELINE_STAGES
+        for stage in stages
         if stage["id"] in tracker.stage_reports
     ]
 

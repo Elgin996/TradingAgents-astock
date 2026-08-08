@@ -33,6 +33,7 @@ class Reflector:
         final_decision: str,
         raw_return: float,
         alpha_return: float,
+        benchmark_label: str = "CSI 300 (沪深300)",
     ) -> str:
         """Single reflection call on the final trade decision with outcome context.
 
@@ -45,7 +46,7 @@ class Reflector:
                 "human",
                 (
                     f"Raw return: {raw_return:+.1%}\n"
-                    f"Alpha vs CSI 300 (沪深300): {alpha_return:+.1%}\n\n"
+                    f"Alpha vs {benchmark_label}: {alpha_return:+.1%}\n\n"
                     f"Final Decision:\n{final_decision}"
                 ),
             ),

@@ -1,0 +1,172 @@
+"""Read-only securities-master adapter used during ETF source validation.
+
+The two sources have deliberately separate responsibilities:
+
+* mootdx's market lists establish the exchange membership without inferring it
+  from a code prefix;
+* Eastmoney's fund profile supplies the fund type and tracking-index fields
+  needed to classify an exchange-traded fund.
+
+This adapter does not create an ``InstrumentProfile`` yet.  Eastmoney's public
+profile does not provide a provider-qualified tracking-index code, which is a
+required identity field for the planned ETF analysis mode.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from functools import lru_cache
+from io import StringIO
+import re
+from typing import Literal
+
+import pandas as pd
+import requests
+
+from .a_stock import _get_mootdx_client
+from .utils import safe_ticker_component
+
+
+FundClassification = Literal[
+    "domestic_equity_etf",
+    "unsupported_etf",
+    "not_etf",
+]
+TrackingIndexCodeSource = Literal["missing", "user_supplied"]
+
+
+@dataclass(frozen=True)
+class FundMasterRecord:
+    """Classified fund metadata from the validated phase-0 sources."""
+
+    symbol: str
+    exchange: Literal["SSE", "SZSE"]
+    fund_name: str
+    fund_type: str
+    tracking_index_name: str | None
+    fund_manager: str | None
+    listed_or_established_date: str | None
+    management_fee: str | None
+    custodian_fee: str | None
+    classification: FundClassification
+    classification_reason: str
+    tracking_index_code: str | None = None
+    tracking_index_provider: str | None = None
+    tracking_index_code_source: TrackingIndexCodeSource = "missing"
+
+
+def _text(value: object) -> str | None:
+    if value is None or pd.isna(value):
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+@lru_cache(maxsize=1)
+def _exchange_memberships() -> dict[str, Literal["SSE", "SZSE"]]:
+    """Return exchange membership from the mootdx securities master."""
+    client = _get_mootdx_client()
+    memberships: dict[str, Literal["SSE", "SZSE"]] = {}
+    for market, exchange in ((0, "SZSE"), (1, "SSE")):
+        securities = client.stocks(market=market)
+        if securities is None or securities.empty or "code" not in securities:
+            raise RuntimeError(f"mootdx returned no {exchange} securities master")
+        for code in securities["code"]:
+            normalized = str(code).strip()
+            if normalized:
+                memberships[normalized] = exchange
+    return memberships
+
+
+def _lookup_exchange(symbol: str) -> Literal["SSE", "SZSE"]:
+    exchange = _exchange_memberships().get(symbol)
+    if exchange is None:
+        raise ValueError(f"{symbol} is absent from the SSE/SZSE securities master")
+    return exchange
+
+
+def _fetch_profile_fields(symbol: str) -> dict[str, str]:
+    """Fetch the tabular Eastmoney public fund profile for one code."""
+    response = requests.get(
+        f"https://fundf10.eastmoney.com/jbgk_{symbol}.html",
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://fund.eastmoney.com/",
+        },
+        timeout=15,
+    )
+    response.raise_for_status()
+
+    for table in pd.read_html(StringIO(response.text)):
+        if table.shape[1] != 4:
+            continue
+        fields: dict[str, str] = {}
+        for _, row in table.iterrows():
+            key_a, value_a, key_b, value_b = (_text(value) for value in row.iloc[:4])
+            if key_a and value_a:
+                fields[key_a] = value_a
+            if key_b and value_b:
+                fields[key_b] = value_b
+        if "基金全称" in fields and "基金类型" in fields:
+            return fields
+    raise ValueError(f"{symbol} has no parseable Eastmoney fund profile")
+
+
+def _classify(fields: dict[str, str]) -> tuple[FundClassification, str]:
+    full_name = fields["基金全称"]
+    fund_type = fields["基金类型"]
+    tracking_index = fields.get("跟踪标的")
+    is_etf = "交易型开放式" in full_name
+
+    if not is_etf:
+        return "not_etf", "基金全称不包含“交易型开放式”"
+    if fund_type != "指数型-股票":
+        return "unsupported_etf", f"基金类型为“{fund_type}”，不属于境内股票指数 ETF"
+    if not tracking_index or tracking_index == "该基金无跟踪标的":
+        return "unsupported_etf", "缺少可确认的跟踪标的"
+    return "domestic_equity_etf", "交易型开放式、指数型-股票且具有跟踪标的"
+
+
+def resolve_fund_master(symbol: str) -> FundMasterRecord:
+    """Resolve and classify one fund without inferring its exchange or type."""
+    code = safe_ticker_component(symbol)
+    exchange = _lookup_exchange(code)
+    fields = _fetch_profile_fields(code)
+    classification, reason = _classify(fields)
+
+    return FundMasterRecord(
+        symbol=code,
+        exchange=exchange,
+        fund_name=fields.get("基金简称") or fields["基金全称"],
+        fund_type=fields["基金类型"],
+        tracking_index_name=fields.get("跟踪标的"),
+        fund_manager=fields.get("基金管理人"),
+        listed_or_established_date=fields.get("成立日期/规模"),
+        management_fee=fields.get("管理费率"),
+        custodian_fee=fields.get("托管费率"),
+        classification=classification,
+        classification_reason=reason,
+    )
+
+
+def with_user_supplied_tracking_index_code(
+    record: FundMasterRecord,
+    *,
+    code: str,
+    provider: str,
+) -> FundMasterRecord:
+    """Attach a confirmed index identifier without altering master-data facts."""
+    normalized_code = code.strip()
+    normalized_provider = provider.strip()
+    if not re.fullmatch(r"[A-Za-z0-9._-]{1,64}", normalized_code):
+        raise ValueError("跟踪指数代码只能包含字母、数字、点、下划线或连字符，最长 64 位")
+    if not re.fullmatch(r"[\w .&()-]{1,64}", normalized_provider):
+        raise ValueError("指数供应方名称格式无效，最长 64 位")
+    return FundMasterRecord(
+        **{
+            **record.__dict__,
+            "tracking_index_code": normalized_code,
+            "tracking_index_provider": normalized_provider,
+            "tracking_index_code_source": "user_supplied",
+        }
+    )

@@ -1,6 +1,7 @@
 from langchain_core.tools import tool
 from typing import Annotated
 import re
+from tradingagents.dataflows.capability_guard import assert_tool_allowed
 from tradingagents.dataflows.interface import route_to_vendor
 
 _A_STOCK_CODE_RE = re.compile(r"^\d{6}$")
@@ -41,6 +42,7 @@ def get_news(
     ok, code_or_message = _validate_a_stock_code("get_news", ticker)
     if not ok:
         return code_or_message
+    assert_tool_allowed("get_news")
     return route_to_vendor("get_news", code_or_message, start_date, end_date)
 
 @tool
@@ -59,6 +61,7 @@ def get_global_news(
     Returns:
         str: A formatted string containing global news data
     """
+    assert_tool_allowed("get_global_news")
     return route_to_vendor("get_global_news", curr_date, look_back_days, limit)
 
 @tool
@@ -76,4 +79,5 @@ def get_insider_transactions(
     ok, code_or_message = _validate_a_stock_code("get_insider_transactions", ticker)
     if not ok:
         return code_or_message
+    assert_tool_allowed("get_insider_transactions")
     return route_to_vendor("get_insider_transactions", code_or_message)

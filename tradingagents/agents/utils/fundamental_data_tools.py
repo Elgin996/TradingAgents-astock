@@ -1,5 +1,6 @@
 from langchain_core.tools import tool
 from typing import Annotated
+from tradingagents.dataflows.capability_guard import assert_tool_allowed
 from tradingagents.dataflows.interface import route_to_vendor
 
 
@@ -17,6 +18,7 @@ def get_fundamentals(
     Returns:
         str: A formatted report containing comprehensive fundamental data
     """
+    assert_tool_allowed("get_fundamentals")
     return route_to_vendor("get_fundamentals", ticker, curr_date)
 
 
@@ -36,6 +38,7 @@ def get_balance_sheet(
     Returns:
         str: A formatted report containing balance sheet data
     """
+    assert_tool_allowed("get_balance_sheet")
     return route_to_vendor("get_balance_sheet", ticker, freq, curr_date)
 
 
@@ -55,6 +58,7 @@ def get_cashflow(
     Returns:
         str: A formatted report containing cash flow statement data
     """
+    assert_tool_allowed("get_cashflow")
     return route_to_vendor("get_cashflow", ticker, freq, curr_date)
 
 
@@ -74,4 +78,5 @@ def get_income_statement(
     Returns:
         str: A formatted report containing income statement data
     """
+    assert_tool_allowed("get_income_statement")
     return route_to_vendor("get_income_statement", ticker, freq, curr_date)

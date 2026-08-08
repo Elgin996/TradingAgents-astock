@@ -219,16 +219,23 @@ if start_req:
     if start_req.get("fresh"):
         from tradingagents.graph.checkpointer import clear_checkpoint
 
-        clear_incomplete_task(start_req["ticker"], start_req["trade_date"])
+        clear_incomplete_task(
+            start_req["ticker"],
+            start_req["trade_date"],
+            start_req.get("analysis_mode", "stock"),
+        )
         clear_checkpoint(
             DEFAULT_CONFIG["data_cache_dir"],
             start_req["ticker"],
             start_req["trade_date"],
+            start_req.get("analysis_mode", "stock"),
         )
 
     tracker = ProgressTracker(
         ticker=start_req["ticker"],
         trade_date=start_req["trade_date"],
+        analysis_mode=start_req.get("analysis_mode", "stock"),
+        instrument_profile=start_req.get("instrument_profile"),
     )
     st.session_state["tracker"] = tracker
     st.session_state["viewing_history"] = None
@@ -237,6 +244,8 @@ if start_req:
         trade_date=start_req["trade_date"],
         config=_build_config(),
         tracker=tracker,
+        analysis_mode=start_req.get("analysis_mode", "stock"),
+        instrument_profile=start_req.get("instrument_profile"),
     )
 
 
@@ -296,6 +305,8 @@ elif tracker and tracker.error:
         st.session_state["start_analysis"] = {
             "ticker": tracker.ticker,
             "trade_date": tracker.trade_date,
+            "analysis_mode": tracker.analysis_mode,
+            "instrument_profile": tracker.instrument_profile,
         }
         st.session_state["viewing_history"] = None
         st.rerun()

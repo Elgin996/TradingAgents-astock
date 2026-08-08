@@ -144,6 +144,26 @@ class TestCheckpointResume(unittest.TestCase):
         # Original date checkpoint still exists (untouched)
         self.assertTrue(has_checkpoint(self.tmpdir, self.ticker, self.date))
 
+    def test_different_analysis_mode_does_not_resume_checkpoint(self):
+        """ETF and stock runs must not share a same-date checkpoint."""
+        global _should_crash
+        builder = _build_graph()
+        stock_tid = thread_id(self.ticker, self.date, "stock")
+        etf_tid = thread_id(self.ticker, self.date, "etf")
+
+        _should_crash = True
+        with get_checkpointer(self.tmpdir, self.ticker) as saver:
+            graph = builder.compile(checkpointer=saver)
+            with self.assertRaises(RuntimeError):
+                graph.invoke(
+                    {"count": 0},
+                    config={"configurable": {"thread_id": stock_tid}},
+                )
+
+        self.assertTrue(has_checkpoint(self.tmpdir, self.ticker, self.date, "stock"))
+        self.assertFalse(has_checkpoint(self.tmpdir, self.ticker, self.date, "etf"))
+        self.assertNotEqual(stock_tid, etf_tid)
+
     def test_trading_graph_prepare_uses_none_input_when_resuming(self):
         """TradingAgentsGraph must resume with None input, not a fresh state."""
         global _should_crash

@@ -1,5 +1,6 @@
 from langchain_core.tools import tool
 from typing import Annotated
+from tradingagents.dataflows.capability_guard import assert_tool_allowed
 from tradingagents.dataflows.interface import route_to_vendor
 
 @tool
@@ -22,6 +23,7 @@ def get_indicators(
     """
     # LLMs sometimes pass multiple indicators as a comma-separated string;
     # split and process each individually.
+    assert_tool_allowed("get_indicators")
     indicators = [i.strip().lower() for i in indicator.split(",") if i.strip()]
     results = []
     for ind in indicators:
