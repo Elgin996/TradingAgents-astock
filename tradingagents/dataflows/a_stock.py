@@ -324,8 +324,13 @@ _UA = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
 # 不限流（实测不封 IP 或风控极弱）。批量任务可调大 EM_MIN_INTERVAL 进一步降速。
 # 两次东财请求最小间隔(秒)；批量多 Agent 场景可设环境变量 EM_MIN_INTERVAL=1.5~2 降速。
 _EM_MIN_INTERVAL = float(os.environ.get("EM_MIN_INTERVAL", "1.0"))
+# The documented Eastmoney limits are both a *rate* and a *concurrency* rule.
+# The interval below spaces request starts; this semaphore bounds requests
+# actually in flight, which slow responses would otherwise let pile up.
+_EM_MAX_INFLIGHT = int(os.environ.get("EM_MAX_INFLIGHT", "4"))
 _em_lock = threading.Lock()
 _em_next_free = 0.0  # earliest wall-clock time the next call may start
+_em_inflight = threading.Semaphore(_EM_MAX_INFLIGHT)
 _em_local = threading.local()
 
 
@@ -357,9 +362,10 @@ def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
     delay = start_at - time.time()
     if delay > 0:
         time.sleep(delay)
-    return _em_session().get(
-        url, params=params, headers=headers, timeout=timeout, **kwargs
-    )
+    with _em_inflight:
+        return _em_session().get(
+            url, params=params, headers=headers, timeout=timeout, **kwargs
+        )
 
 
 def _eastmoney_datacenter(
@@ -845,19 +851,61 @@ def get_indicators(
 # ---- 3. get_fundamentals ----
 
 
+def _coerce_mootdx_report_dates(series: pd.Series) -> pd.Series:
+    """Parse mootdx/pytdx finance date columns (often YYYYMMDD ints)."""
+    as_str = series.astype(str).str.replace(r"\.0$", "", regex=True).str.strip()
+    dates = pd.to_datetime(as_str, format="%Y%m%d", errors="coerce")
+    if dates.isna().all():
+        dates = pd.to_datetime(series, errors="coerce")
+    return dates
+
+
+def _latest_report_at_or_before(fin, curr_date: str | None):
+    """Most recent mootdx finance row whose report date is <= curr_date.
+
+    ``Quotes.finance`` / ``get_finance_info`` returns the *latest* server
+    snapshot (typically one row) with ``updated_date`` as YYYYMMDD. An
+    unfiltered ``iloc[0]`` leaks that live snapshot into a backtest.
+    Fail closed when no date column can be identified.
+    """
+    if fin is None or not isinstance(fin, pd.DataFrame) or fin.empty:
+        return None
+    if not curr_date:
+        return fin.iloc[0]
+    # Pin the real pytdx column first; keep aliases for other mootdx shapes.
+    date_col = next(
+        (
+            c
+            for c in ("updated_date", "report_date", "date", "reportdate")
+            if c in fin.columns
+        ),
+        None,
+    )
+    if date_col is None:
+        logger.warning(
+            "mootdx finance for this symbol has no report-date column %s; "
+            "omitting the historical block rather than risking lookahead",
+            list(fin.columns),
+        )
+        return None
+    dates = _coerce_mootdx_report_dates(fin[date_col])
+    eligible = fin[dates <= pd.Timestamp(curr_date)]
+    return None if eligible.empty else eligible.iloc[0]
+
+
 def get_fundamentals(
     ticker: Annotated[str, "A-stock code"],
     curr_date: Annotated[
         str,
         "requested date YYYY-MM-DD; live valuation is a realtime snapshot. "
-        "When strict_point_in_time is on, live sections are omitted for past dates "
-        "while mootdx quarterly snapshots are still returned.",
+        "When strict_point_in_time is on, live sections are omitted for past dates. "
+        "mootdx finance is included only when its updated_date is <= curr_date.",
     ] = None,
 ) -> str:
-    """Get company fundamentals (mootdx quarterly + live valuation snapshots).
+    """Get company fundamentals (mootdx finance + live valuation snapshots).
 
     Live sections (Tencent/Eastmoney/同花顺) are realtime and unsafe for backtests.
-    mootdx financial snapshots are under a separate historical heading.
+    mootdx finance is filtered to rows with updated_date <= curr_date.
     """
     code = _normalize_ticker(ticker)
     live_refusal = _reject_if_not_point_in_time(curr_date, "get_fundamentals")
@@ -868,14 +916,12 @@ def get_fundamentals(
         hist_lines: list[str] = []
         live_lines: list[str] = []
 
-        # --- mootdx: financial snapshot (quarterly, usable historically) ---
+        # --- mootdx: finance snapshot filtered to curr_date (no lookahead) ---
         try:
             client = _get_mootdx_client()
             fin = client.finance(symbol=code)
-            if fin is not None and not (
-                isinstance(fin, pd.DataFrame) and fin.empty
-            ):
-                row = fin.iloc[0] if isinstance(fin, pd.DataFrame) else fin
+            row = _latest_report_at_or_before(fin, curr_date)
+            if row is not None:
                 field_map = {
                     "eps": "EPS (Quarterly)",
                     "bvps": "Book Value Per Share",

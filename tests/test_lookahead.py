@@ -60,3 +60,43 @@ def test_filter_strips_future_fiscal_periods():
     )
     out = json.loads(_filter_reports_by_date(payload, "2026-06-30"))
     assert [r["fiscalDateEnding"] for r in out["quarterlyReports"]] == ["2026-03-31"]
+
+
+def test_get_fundamentals_omits_future_quarterly_rows(monkeypatch):
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {"updated_date": [20240930, 20231231], "eps": [9.9, 1.1]}
+    )
+
+    class _Client:
+        def finance(self, symbol):
+            return frame
+
+    monkeypatch.setattr(a_stock, "_get_mootdx_client", lambda: _Client())
+    monkeypatch.setattr(
+        "tradingagents.dataflows.config.get_config",
+        lambda: {"strict_point_in_time": True},
+    )
+    out = a_stock.get_fundamentals("600519", curr_date="2024-01-15")
+    assert "1.1" in out
+    assert "9.9" not in out
+
+
+def test_get_fundamentals_omits_block_when_no_date_column(monkeypatch):
+    import pandas as pd
+
+    frame = pd.DataFrame({"eps": [9.9]})
+
+    class _Client:
+        def finance(self, symbol):
+            return frame
+
+    monkeypatch.setattr(a_stock, "_get_mootdx_client", lambda: _Client())
+    monkeypatch.setattr(
+        "tradingagents.dataflows.config.get_config",
+        lambda: {"strict_point_in_time": True},
+    )
+    out = a_stock.get_fundamentals("600519", curr_date="2024-01-15")
+    assert "EPS" not in out
+    assert "9.9" not in out

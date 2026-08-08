@@ -27,3 +27,9 @@ def test_recursion_limit_is_configurable(monkeypatch, tmp_path):
 
 def test_default_max_recur_limit_is_250():
     assert DEFAULT_CONFIG["max_recur_limit"] == 250
+
+
+def test_propagator_default_matches_config():
+    from tradingagents.graph.propagation import Propagator
+
+    assert Propagator().max_recur_limit == DEFAULT_CONFIG["max_recur_limit"]

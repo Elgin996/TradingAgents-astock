@@ -173,14 +173,15 @@ def create_quality_gate(llm, selected_analysts=None):
             except Exception as e:
                 llm_review = f"（LLM 复审失败: {type(e).__name__}: {e}）"
 
+        verdict = "未通过 ❌" if data_quality_failed else "通过 ✅"
         summary = (
             f"## 数据质量门控结果\n\n"
             f"**标的**: {ticker} | **交易日**: {trade_date}\n\n"
             f"### 硬检查结果\n{hard_summary}\n\n"
             f"### LLM 复审\n"
             f"{llm_review if llm_review else '（跳过 — 多数报告未通过硬检查）'}\n\n"
-            f"**data_quality_failed**: {str(data_quality_failed).lower()} "
-            f"(fail_count={fail_count}, threshold={threshold})\n"
+            f"### 门控判定\n"
+            f"**{verdict}** — {fail_count} 项硬检查未达标，阈值为 {threshold} 项。\n"
         )
 
         return {

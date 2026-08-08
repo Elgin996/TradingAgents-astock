@@ -439,6 +439,15 @@ def test_auth_failure_is_detected_from_api_retry_and_assistant_text():
     assert _looks_like_auth_failure(_Normal()) is False
 
 
+def test_exc_looks_like_auth_requires_401_word_boundary():
+    from tradingagents.llm_clients.claude_agent_sdk_client import _exc_looks_like_auth
+
+    assert not _exc_looks_like_auth("connection reset, request id 8814012")
+    assert not _exc_looks_like_auth("upstream error 1401")
+    assert _exc_looks_like_auth("HTTP 401 Unauthorized")
+    assert _exc_looks_like_auth("OAuth token expired — please re-authenticate")
+
+
 def test_auth_error_is_not_in_fallback_errors():
     """凭据失效时降级到付费 provider ＝ 悄悄开始计费，正是启用订阅要避免的。
     这条锁住 _AuthError 不被 fallback 吞掉。"""

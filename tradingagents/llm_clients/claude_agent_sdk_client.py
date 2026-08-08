@@ -86,12 +86,15 @@ _AUTH_MARKERS = (
 )
 
 # Broader hints for exception / string classification (not for ordinary assistant text).
+# Numeric "401" is matched via word boundary below — a bare substring false-positives on
+# request IDs / error codes like 1401 / 4010.
 _AUTH_HINTS = (
-    "oauth", "unauthorized", "401", "authentication", "authenticate",
+    "oauth", "unauthorized", "authentication", "authenticate",
     "invalid api key", "not logged in", "please log in", "setup-token",
     "credentials", "expired token", "authentication_failed",
     "oauth access token has expired", "re-authenticate", "please run /login",
 )
+_AUTH_STATUS_RE = re.compile(r"\b401\b")
 
 _DEFAULT_SDK_TIMEOUT = int(os.environ.get("CLAUDE_AGENT_SDK_TIMEOUT", "600"))
 
@@ -128,7 +131,8 @@ def _looks_like_auth_failure(message: Any) -> bool:
 
 def _exc_looks_like_auth(exc_or_msg: Any) -> bool:
     """True when exception/string content indicates a subscription auth failure."""
-    return any(h in str(exc_or_msg).lower() for h in _AUTH_HINTS)
+    blob = str(exc_or_msg).lower()
+    return bool(_AUTH_STATUS_RE.search(blob)) or any(h in blob for h in _AUTH_HINTS)
 
 
 def _auth_failure_hint(message: Any) -> str:
@@ -282,61 +286,81 @@ def _extract_json(text: str) -> str:
 def _run_async(coro, timeout: Optional[float] = None):
     """Run an async coroutine to completion from a synchronous caller.
 
-    ``trading_graph`` drives LangGraph synchronously, so normally there is no
-    running loop and ``asyncio.run`` works. If a loop is already running, run
-    the coroutine on a dedicated thread with its own loop so we never disturb
-    the caller's loop.
-
-    When a loop is already running, the worker thread is joined with a timeout
-    (default ``_DEFAULT_SDK_TIMEOUT`` / ``CLAUDE_AGENT_SDK_TIMEOUT``) so a hung
-    ``claude`` CLI cannot wedge the graph forever.
+    Always runs on a dedicated thread with its own event loop so:
+    1. We never nest on a caller's already-running loop.
+    2. A hung ``claude`` CLI can be cancelled from the joining thread by
+       cancelling the asyncio task and stopping the worker loop (which closes
+       the SDK transport / subprocess via the query async-generator teardown).
     """
     if timeout is None:
         timeout = float(_DEFAULT_SDK_TIMEOUT)
 
-    try:
-        asyncio.get_running_loop()
-    except RuntimeError:
-        # No running loop — still bound the wait so a hung CLI cannot block forever.
-        box: dict[str, Any] = {}
-
-        def _worker_no_loop():
-            try:
-                box["value"] = asyncio.run(coro)
-            except BaseException as exc:
-                box["error"] = exc
-
-        thread = threading.Thread(target=_worker_no_loop, daemon=True)
-        thread.start()
-        thread.join(timeout)
-        if thread.is_alive():
-            raise _SDKResultError(
-                f"Agent SDK call exceeded {timeout}s. The `claude` CLI subprocess "
-                f"may be hung; check for orphaned processes."
-            )
-        if "error" in box:
-            raise box["error"]
-        return box["value"]
-
     box: dict[str, Any] = {}
 
     def _worker():
+        loop = asyncio.new_event_loop()
+        box["loop"] = loop
+        asyncio.set_event_loop(loop)
         try:
-            box["value"] = asyncio.run(coro)
-        except BaseException as exc:  # propagate to the calling thread, don't swallow
+            task = loop.create_task(coro)
+            box["task"] = task
+            box["value"] = loop.run_until_complete(task)
+        except BaseException as exc:
             box["error"] = exc
+        finally:
+            try:
+                pending = asyncio.all_tasks(loop)
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    loop.run_until_complete(
+                        asyncio.gather(*pending, return_exceptions=True)
+                    )
+                loop.run_until_complete(loop.shutdown_asyncgens())
+            except Exception:
+                pass
+            loop.close()
 
     thread = threading.Thread(target=_worker, daemon=True)
     thread.start()
     thread.join(timeout)
     if thread.is_alive():
+        _request_sdk_worker_shutdown(box)
+        thread.join(5)
         raise _SDKResultError(
-            f"Agent SDK call exceeded {timeout}s. The `claude` CLI subprocess "
-            f"may be hung; check for orphaned processes."
+            f"Agent SDK call exceeded {timeout}s; the `claude` subprocess was "
+            f"terminated."
         )
     if "error" in box:
         raise box["error"]
     return box["value"]
+
+
+def _request_sdk_worker_shutdown(box: dict[str, Any]) -> None:
+    """Best-effort cancel of the worker's asyncio task + loop stop.
+
+    The Agent SDK ``query()`` path owns a ``SubprocessCLITransport``. Cancelling
+    the task closes the async generator, which disconnects the transport and
+    tears down the ``claude`` child process. We cannot reach a
+    ``ClaudeSDKClient.disconnect()`` handle from here because this adapter uses
+    the one-shot ``query()`` API.
+    """
+    loop = box.get("loop")
+    task = box.get("task")
+    if loop is None:
+        return
+
+    def _cancel():
+        if task is not None and not task.done():
+            task.cancel()
+        # Unblock run_until_complete if the task ignores cancellation.
+        loop.stop()
+
+    try:
+        loop.call_soon_threadsafe(_cancel)
+    except RuntimeError:
+        # Loop already closed.
+        pass
 
 
 def _sdk_tools_from_langchain(lc_tools):

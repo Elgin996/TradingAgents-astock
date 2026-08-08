@@ -58,28 +58,49 @@ _CN_LABEL_RE = re.compile(
 _CN_TERM_RE = re.compile(_CN_ALT)
 
 # Cues that invert or disqualify a nearby rating word.
+#
+# Never list a bare `不`: it is a negating morpheme, not a word, and it occurs
+# inside 不错 / 不俗 / 不小 / 不断 / 不仅 — all common in bullish A-share prose.
+# Only explicit negating constructions belong here. English cues keep a trailing
+# space or apostrophe so "not" does not match inside "nothing" / "notable".
 _NEGATION_CUES = (
+    # English
     "not ", "n't", "avoid", "refrain", "rather than", "instead of",
-    "不", "勿", "避免", "无需", "不宜", "而非", "并非", "谈不上",
-    "不建议", "不要", "并非",
+    "no longer", "would not", "do not", "cannot",
+    # Chinese — explicit negating verbs/constructions only
+    "不建议", "不推荐", "不宜", "不应", "不要", "不看好", "不值得", "不考虑",
+    "无需", "勿", "避免", "而非", "并非", "谈不上", "谈不到", "反对",
 )
 
-# Rating terms that are also ordinary domain nouns. When the term is preceded by
-# one of these, it is describing a market fact, not issuing a recommendation.
-_COMPOUND_CONTEXTS = {
-    "减持": ("股东", "大股东", "高管", "董监高", "计划", "公告"),
-    "卖出": ("席位", "营业部", "前五", "龙虎榜"),
-    "买入": ("席位", "营业部", "前五", "龙虎榜", "北向"),
+# Chinese prose delimits clauses with ，and 、. Omitting them let a cue at the
+# start of a long sentence poison every rating term after it.
+_CLAUSE_SPLIT_RE = re.compile(r"[。；;.!?\n，、]")
+
+# Rating terms that double as ordinary domain nouns. Direction matters:
+# "龙虎榜卖出" is a market fact by its prefix, "卖出席位" by its suffix.
+_COMPOUND_PREFIX = {
+    "减持": ("股东", "高管", "董监高", "实控人"),
+    "卖出": ("龙虎榜", "前五", "机构专用"),
+    "买入": ("龙虎榜", "前五", "北向", "机构专用"),
+}
+_COMPOUND_SUFFIX = {
+    "减持": ("计划", "公告", "股份", "比例"),
+    "卖出": ("席位", "营业部", "金额", "占比"),
+    "买入": ("席位", "营业部", "金额", "占比"),
 }
 
+_EN_WORD_RE = re.compile(r"[A-Za-z']+")
 
-def _disqualified(text: str, start: int, term: str) -> bool:
+
+def _disqualified(text: str, start: int, end: int, term: str) -> bool:
     """True when the match at ``start`` is negated or part of a compound noun."""
-    clause = re.split(r"[。；;.!?\n]", text[:start])[-1].lower()
+    clause = _CLAUSE_SPLIT_RE.split(text[:start])[-1].lower()
     if any(cue in clause for cue in _NEGATION_CUES):
         return True
     prefix = text[max(0, start - 6):start]
-    return any(ctx in prefix for ctx in _COMPOUND_CONTEXTS.get(term, ()))
+    if any(ctx in prefix for ctx in _COMPOUND_PREFIX.get(term, ())):
+        return True
+    return text.startswith(_COMPOUND_SUFFIX.get(term, ()), end)
 
 
 def parse_rating(text: str, default: str = "Hold") -> str:
@@ -107,39 +128,28 @@ def parse_rating(text: str, default: str = "Hold") -> str:
     if m:
         return _CN_RATING_MAP[m.group(1)]
 
-    # 3. Bare English rating word — scan conclusion-first; skip negated/compound hits.
-    for line in reversed(text.splitlines()):
-        words = line.lower().split()
-        for word in reversed(words):
-            clean = word.strip("*:.,")
-            if clean not in _RATING_SET:
-                continue
-            # Locate this occurrence in the original text for disqualification.
-            # Prefer the last case-insensitive match of this word on the line.
-            line_lower = line.lower()
-            idx_in_line = line_lower.rfind(clean)
-            if idx_in_line < 0:
-                continue
-            # Absolute offset approximate: find the line in text.
-            abs_start = text.lower().rfind(line_lower)
-            if abs_start < 0:
-                abs_start = 0
-            start = abs_start + idx_in_line
-            if _disqualified(text, start, clean):
-                continue
-            rating = clean.capitalize()
-            logger.warning(
-                "parse_rating: no explicit rating label found; inferred %r from bare term. "
-                "Text begins: %.120s",
-                rating, text,
-            )
-            return rating
+    # 3. Bare English rating word — last non-disqualified match wins
+    #    (conclusion-first). Iterating offsets in the full text avoids
+    #    reconstructing a line's position, which broke on repeated lines.
+    last_en = None
+    for m in _EN_WORD_RE.finditer(text):
+        word = m.group(0).lower()
+        if word in _RATING_SET and not _disqualified(text, m.start(), m.end(), word):
+            last_en = word
+    if last_en is not None:
+        rating = last_en.capitalize()
+        logger.warning(
+            "parse_rating: no explicit rating label found; inferred %r from bare term. "
+            "Text begins: %.120s",
+            rating, text,
+        )
+        return rating
 
     # 4. Bare Chinese rating term — last non-disqualified match wins.
     last_match = None
     for m in _CN_TERM_RE.finditer(text):
         term = m.group(0)
-        if _disqualified(text, m.start(), term):
+        if _disqualified(text, m.start(), m.end(), term):
             continue
         last_match = m
     if last_match is not None:

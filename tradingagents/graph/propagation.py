@@ -6,13 +6,16 @@ from tradingagents.agents.utils.agent_states import (
     InvestDebateState,
     RiskDebateState,
 )
+from tradingagents.default_config import DEFAULT_CONFIG
 
 
 class Propagator:
     """Handles state initialization and propagation through the graph."""
 
-    def __init__(self, max_recur_limit=100):
+    def __init__(self, max_recur_limit=None):
         """Initialize with configuration parameters."""
+        if max_recur_limit is None:
+            max_recur_limit = DEFAULT_CONFIG["max_recur_limit"]
         self.max_recur_limit = max_recur_limit
 
     def create_initial_state(

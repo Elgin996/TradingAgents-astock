@@ -56,6 +56,24 @@ def test_selected_analysts_empty_reports_fail():
     assert result["data_quality_failed"] is True
 
 
+def test_quality_gate_summary_has_no_internal_identifiers():
+    llm = MagicMock()
+    gate = create_quality_gate(llm, selected_analysts=["market", "news"])
+    long_ok = ("x" * 250) + "\n| a | b |\n| --- | --- |\n"
+    out = gate(
+        _state(
+            {
+                "market_report": long_ok,
+                "news_report": long_ok,
+            }
+        )
+    )["data_quality_summary"]
+    assert "data_quality_failed" not in out
+    assert "fail_count" not in out
+    assert "threshold" not in out
+    assert "通过" in out
+
+
 def test_block_policy_ends_graph():
     logic = ConditionalLogic(quality_gate_policy="block")
     assert logic.should_continue_after_quality_gate({"data_quality_failed": True}) is END

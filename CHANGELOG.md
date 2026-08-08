@@ -133,6 +133,9 @@ extra 存在，`uv sync` 就对**所有人**失败，包括从不用 Gemini 的�
 条目会每次运行白发一次网络请求、且永远 pending 不给任何理由。新增
 `_is_unsupported_by_yfinance()` 直接短路并明确写清原因。
 
+> **Round-2 清理**：记忆反思已改走 A 股数据源后，上述两个 helper 在生产路径上再无
+> 调用方，仅被测试保活；已删除（见 Round-2 bugfix）。
+
 ### 修复：DeepSeek V4 / MiniMax M2.x 结构化输出不稳定（社区 PR #83）
 
 感谢 [@wangyuxun6699](https://github.com/wangyuxun6699)。

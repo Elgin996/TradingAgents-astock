@@ -29,15 +29,14 @@ try:
 except ImportError:  # pragma: no cover
     OutputParserException = ()  # type: ignore[misc, assignment]
 
+# Only errors that mean *the model's output did not match the schema*.
+# Do not catch TypeError/AttributeError/ValueError/KeyError — those mask
+# programming bugs and some provider faults as "schema failure → free text".
 _SCHEMA_ERRORS: Tuple[Type[BaseException], ...] = (
-    ValidationError,
-    JSONDecodeError,
-    KeyError,
-    TypeError,
-    AttributeError,  # e.g. structured invoke returned None / wrong shape
-    ValueError,
+    ValidationError,   # pydantic: shape mismatch
+    JSONDecodeError,   # provider returned non-JSON where JSON was required
 )
-if OutputParserException is not ():
+if OutputParserException:
     _SCHEMA_ERRORS = _SCHEMA_ERRORS + (OutputParserException,)  # type: ignore[arg-type]
 
 # Survives into the final report so CLI/web/memory can surface the degradation.
@@ -86,7 +85,21 @@ def invoke_structured_or_freetext(
     """
     if structured_llm is not None:
         try:
-            return render(structured_llm.invoke(prompt))
+            result = structured_llm.invoke(prompt)
+            # tool_choice=None makes the schema tool optional: some providers
+            # (DeepSeek V4 / MiniMax via LangChain) return None instead of a
+            # parsed model when the model emits plain text. Treat that as a
+            # schema miss — do NOT broaden to AttributeError, which would also
+            # swallow bugs in our own render functions.
+            if result is None:
+                logger.warning(
+                    "%s: structured invoke returned None (model skipped the "
+                    "schema tool); falling back to free text — the rating for "
+                    "this run will be recovered heuristically and may be unreliable",
+                    agent_name,
+                )
+            else:
+                return render(result)
         except _SCHEMA_ERRORS as exc:
             logger.warning(
                 "%s: model returned output that does not match the schema (%s); "
@@ -94,7 +107,7 @@ def invoke_structured_or_freetext(
                 "recovered heuristically and may be unreliable",
                 agent_name, exc,
             )
-        # Anything else (timeout, rate limit, auth) propagates.
+        # Anything else (timeout, rate limit, auth, programming errors) propagates.
 
     response = plain_llm.invoke(prompt)
     content = getattr(response, "content", response)

@@ -53,78 +53,6 @@ from .reflection import Reflector
 from .signal_processing import SignalProcessor
 
 
-def _normalize_yfinance_ticker(ticker: str) -> str:
-    """Return the Yahoo Finance symbol for a ticker used by the graph.
-
-    A-stock decisions are stored with their six-digit code (for example
-    ``600519``), while Yahoo Finance requires an exchange suffix for mainland
-    China listings (``600519.SS``).  Without the suffix ``Ticker.history``
-    usually returns an empty frame, so deferred memory outcomes remain pending
-    indefinitely.  Common A-share prefixes/suffixes are normalized as well;
-    non-A-share symbols remain unchanged so the graph remains usable for other
-    markets too.
-    """
-    symbol = str(ticker).strip().upper()
-
-    # The A-stock layer accepts SH/SZ/BJ prefixes and uses .SH for Shanghai,
-    # whereas Yahoo uses .SS.  Normalize those forms before handling bare
-    # six-digit codes. Yahoo has no Beijing exchange suffix, so keep BJ codes
-    # unqualified instead of inventing a symbol that cannot return data.
-    if (
-        len(symbol) == 9
-        and symbol[:6].isdigit()
-        and symbol[6:] in (".SH", ".SZ", ".BJ")
-    ):
-        code, exchange = symbol[:6], symbol[7:]
-        if exchange == "SH":
-            return f"{code}.SS"
-        if exchange == "SZ":
-            return f"{code}.SZ"
-        return code
-    if (
-        len(symbol) == 8
-        and symbol[:2] in ("SH", "SZ", "BJ")
-        and symbol[2:].isdigit()
-    ):
-        code, exchange = symbol[2:], symbol[:2]
-        if exchange == "SH":
-            return f"{code}.SS"
-        if exchange == "SZ":
-            return f"{code}.SZ"
-        return code
-
-    if len(symbol) != 6 or not symbol.isdigit():
-        return symbol
-
-    # The 920xxx range is Beijing-listed; Yahoo has no supported suffix for it.
-    if symbol.startswith("92"):
-        return symbol
-    # Shanghai-listed A shares, B shares and ETFs use the .SS suffix on Yahoo.
-    if symbol.startswith(("5", "6", "9")):
-        return f"{symbol}.SS"
-    # Other Beijing-listed six-digit ranges are not covered by Yahoo either.
-    if symbol.startswith(("4", "8")):
-        return symbol
-    # Shenzhen-listed stocks (000/001/002/003/300/301, etc.).
-    return f"{symbol}.SZ"
-
-
-def _is_unsupported_by_yfinance(symbol: str) -> bool:
-    """True for codes Yahoo Finance has no coverage for at all.
-
-    Beijing Stock Exchange listings (920xxx current, 43x/83x/87x legacy) are
-    absent from Yahoo under every suffix — verified 2026-07-31: ``920002``,
-    ``920002.BJ``, ``920002.SS`` and ``920002.SZ`` all return an empty frame.
-    Retrying them every run only burns a request and leaves the memory entry
-    pending forever with no stated reason, so short-circuit and say why once.
-    """
-    return (
-        len(symbol) == 6
-        and symbol.isdigit()
-        and (symbol.startswith("92") or symbol[:2] in ("43", "83", "87"))
-    )
-
-
 class TradingAgentsGraph:
     """Main class that orchestrates the trading agents framework."""
 
@@ -591,6 +519,21 @@ class TradingAgentsGraph:
 
     def finalize_graph_run(self, company_name, trade_date, final_state):
         """Persist a completed run and clear its checkpoint."""
+        if not final_state:
+            raise RuntimeError(
+                f"Graph produced no state for {company_name} on {trade_date}. "
+                "This usually means the quality gate blocked the run, the "
+                "recursion limit was hit immediately, or the first node's "
+                "provider call failed. Check the log above for the cause."
+            )
+        decision = final_state.get("final_trade_decision")
+        if not decision:
+            raise RuntimeError(
+                f"Graph completed without a final decision for {company_name} "
+                f"on {trade_date}. The pipeline may have halted early "
+                "(quality gate, recursion limit, or provider failure)."
+            )
+
         self.curr_state = final_state
 
         # Log state to disk.
@@ -600,7 +543,7 @@ class TradingAgentsGraph:
         self.memory_log.store_decision(
             ticker=company_name,
             trade_date=trade_date,
-            final_trade_decision=final_state["final_trade_decision"],
+            final_trade_decision=decision,
         )
 
         # Clear checkpoint on successful completion to avoid stale state.
@@ -609,7 +552,7 @@ class TradingAgentsGraph:
                 self.config["data_cache_dir"], company_name, str(trade_date)
             )
 
-        return self.process_signal(final_state["final_trade_decision"])
+        return self.process_signal(decision)
 
     def close_graph_run(self) -> None:
         """Close the active checkpointer context, if any."""
@@ -631,6 +574,13 @@ class TradingAgentsGraph:
                     else:
                         chunk["messages"][-1].pretty_print()
                         trace.append(chunk)
+                if not trace:
+                    raise RuntimeError(
+                        f"Graph produced no state for {company_name} on {trade_date}. "
+                        "This usually means the quality gate blocked the run, the "
+                        "recursion limit was hit immediately, or the first node's "
+                        "provider call failed. Check the log above for the cause."
+                    )
                 final_state = trace[-1]
             else:
                 final_state = self.graph.invoke(init_agent_state, **args)
@@ -642,37 +592,35 @@ class TradingAgentsGraph:
 
     def _log_state(self, trade_date, final_state):
         """Log the final state to a JSON file."""
+        invest = final_state.get("investment_debate_state") or {}
+        risk = final_state.get("risk_debate_state") or {}
         self.log_states_dict[str(trade_date)] = {
-            "company_of_interest": final_state["company_of_interest"],
-            "trade_date": final_state["trade_date"],
-            "market_report": final_state["market_report"],
-            "sentiment_report": final_state["sentiment_report"],
-            "news_report": final_state["news_report"],
-            "fundamentals_report": final_state["fundamentals_report"],
+            "company_of_interest": final_state.get("company_of_interest", ""),
+            "trade_date": final_state.get("trade_date", str(trade_date)),
+            "market_report": final_state.get("market_report", ""),
+            "sentiment_report": final_state.get("sentiment_report", ""),
+            "news_report": final_state.get("news_report", ""),
+            "fundamentals_report": final_state.get("fundamentals_report", ""),
             "policy_report": final_state.get("policy_report", ""),
             "hot_money_report": final_state.get("hot_money_report", ""),
             "lockup_report": final_state.get("lockup_report", ""),
             "investment_debate_state": {
-                "bull_history": final_state["investment_debate_state"]["bull_history"],
-                "bear_history": final_state["investment_debate_state"]["bear_history"],
-                "history": final_state["investment_debate_state"]["history"],
-                "current_response": final_state["investment_debate_state"][
-                    "current_response"
-                ],
-                "judge_decision": final_state["investment_debate_state"][
-                    "judge_decision"
-                ],
+                "bull_history": invest.get("bull_history", ""),
+                "bear_history": invest.get("bear_history", ""),
+                "history": invest.get("history", ""),
+                "current_response": invest.get("current_response", ""),
+                "judge_decision": invest.get("judge_decision", ""),
             },
-            "trader_investment_decision": final_state["trader_investment_plan"],
+            "trader_investment_decision": final_state.get("trader_investment_plan", ""),
             "risk_debate_state": {
-                "aggressive_history": final_state["risk_debate_state"]["aggressive_history"],
-                "conservative_history": final_state["risk_debate_state"]["conservative_history"],
-                "neutral_history": final_state["risk_debate_state"]["neutral_history"],
-                "history": final_state["risk_debate_state"]["history"],
-                "judge_decision": final_state["risk_debate_state"]["judge_decision"],
+                "aggressive_history": risk.get("aggressive_history", ""),
+                "conservative_history": risk.get("conservative_history", ""),
+                "neutral_history": risk.get("neutral_history", ""),
+                "history": risk.get("history", ""),
+                "judge_decision": risk.get("judge_decision", ""),
             },
-            "investment_plan": final_state["investment_plan"],
-            "final_trade_decision": final_state["final_trade_decision"],
+            "investment_plan": final_state.get("investment_plan", ""),
+            "final_trade_decision": final_state.get("final_trade_decision", ""),
         }
 
         # Save to file. Reject ticker values that would escape the

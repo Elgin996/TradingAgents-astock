@@ -9,10 +9,7 @@ from unittest.mock import MagicMock, patch
 from tradingagents.agents.utils.memory import TradingMemoryLog
 from tradingagents.agents.schemas import PortfolioDecision, PortfolioRating
 from tradingagents.graph.reflection import Reflector
-from tradingagents.graph.trading_graph import (
-    TradingAgentsGraph,
-    _normalize_yfinance_ticker,
-)
+from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.graph.propagation import Propagator
 from tradingagents.agents.managers.portfolio_manager import create_portfolio_manager
 
@@ -457,25 +454,6 @@ class TestTradingMemoryLogCore:
 # ---------------------------------------------------------------------------
 
 class TestDeferredReflection:
-
-    # Yahoo Finance ticker normalization
-
-    def test_normalize_yfinance_ticker_adds_mainland_exchange_suffix(self):
-        assert _normalize_yfinance_ticker("600519") == "600519.SS"
-        assert _normalize_yfinance_ticker("000001") == "000001.SZ"
-        assert _normalize_yfinance_ticker("688017") == "688017.SS"
-
-    def test_normalize_yfinance_ticker_preserves_qualified_symbols(self):
-        assert _normalize_yfinance_ticker("600519.SS") == "600519.SS"
-        assert _normalize_yfinance_ticker("600519.SH") == "600519.SS"
-        assert _normalize_yfinance_ticker("SH600519") == "600519.SS"
-        assert _normalize_yfinance_ticker("NVDA") == "NVDA"
-
-    def test_normalize_yfinance_ticker_does_not_invent_beijing_suffix(self):
-        assert _normalize_yfinance_ticker("830799") == "830799"
-        assert _normalize_yfinance_ticker("920002") == "920002"
-        assert _normalize_yfinance_ticker("BJ830799") == "830799"
-        assert _normalize_yfinance_ticker("830799.BJ") == "830799"
 
     # update_with_outcome
 
