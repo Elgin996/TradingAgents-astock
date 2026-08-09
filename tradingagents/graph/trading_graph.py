@@ -54,6 +54,11 @@ from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
 
+# 七个分析师角色——它们受 `selected_analysts` 控制，没选中就不会进图。
+_ANALYST_ROLES = frozenset({
+    "market", "social", "news", "fundamentals", "policy", "hot_money", "lockup",
+})
+
 # 各家 provider 私有的参数：换了 provider 就不能带过去（别家可能直接拒收）。
 _PROVIDER_SPECIFIC_KWARGS = frozenset({
     "reasoning_effort",   # openai
@@ -254,7 +259,9 @@ class TradingAgentsGraph:
         self.quick_thinking_llm = quick_client.get_llm()
 
         # 可选：给单个角色指定模型（#39）。不配 = 完全维持 quick/deep 两档的原行为。
-        self.role_llms = self._build_role_llms(llm_kwargs, deep_on or quick_on)
+        self.role_llms = self._build_role_llms(
+            llm_kwargs, deep_on or quick_on, selected_analysts
+        )
 
         self.memory_log = TradingMemoryLog(self.config)
 
@@ -289,7 +296,10 @@ class TradingAgentsGraph:
         self._checkpointer_ctx = None
 
     def _build_role_llms(
-        self, llm_kwargs: Dict[str, Any], subscription_on: bool
+        self,
+        llm_kwargs: Dict[str, Any],
+        subscription_on: bool,
+        selected_analysts=None,
     ) -> Dict[str, Any]:
         """按 `config["role_llms"]` 给单个角色单独建 LLM（#39）。
 
@@ -310,6 +320,20 @@ class TradingAgentsGraph:
                 f"合法角色：{', '.join(ROLE_KEYS)}。"
                 f"（写错的角色名如果被静默忽略，你会以为配置生效了，实际没有。）"
             )
+
+        # 没被选中的分析师不会进图，就别为它建模型：那会让一个**永远不执行**的节点
+        # 因为缺 API key 或缺可选依赖，把一次本来完全正常的分析在启动时就打断。
+        if selected_analysts is not None:
+            active = set(selected_analysts)
+            skipped = [r for r in specs if r in _ANALYST_ROLES and r not in active]
+            if skipped:
+                specs = {k: v for k, v in specs.items() if k not in skipped}
+                logger.info(
+                    "role_llms: 跳过未选中的分析师角色 %s（不建模型）",
+                    ", ".join(sorted(skipped)),
+                )
+            if not specs:
+                return {}
 
         if subscription_on:
             # 订阅覆盖是为了不产生 API 账单，这里显式点名哪些角色会绕开它去计费，

@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.8] — 2026-08-09
+
+Codex **终轮**审计的四处。前三轮修的东西里，有两处"看着修好了、实际没生效"。
+
+### 修复：未来函数告警仍然不会触发（承接 v0.5.6）
+
+v0.5.6 给 `get_profit_forecast` 的工具补上了 `curr_date` 参数——但给了默认空串。
+LangChain 因此只把 `ticker` 标成必填，模型按 `{"ticker": "600519"}` 正常调用时
+`curr_date` 是空串，`_is_historical("")` 返回 False，**告警照样一次都不会触发**。
+基本面分析师的提示词里也只写了工具名、没提日期参数。
+
+改为**必填**，并在提示词里显式写出 `get_profit_forecast(ticker, curr_date)` 及其原因。
+到这一版，这个告警才真正生效。
+
+### 修复：历史资金流放大窗口后没裁回来（承接 v0.5.6）
+
+v0.5.6 为了能回溯到分析日而放大了请求窗口，但过滤掉未来行之后**没有裁回承诺的
+20 个交易日**——复盘 90 天前会返回约 40 行，既改变了请求的趋势窗口，又把每次情绪
+工具的返回体撑大一倍。已裁回 20 行。
+
+### 修复：未选中的分析师角色也会被建模型
+
+`role_llms` 里配了 `policy`，但本次分析只选了 `market` 时，`policy` 的模型仍会被
+实例化。**一个永远不会执行的节点，可能因为缺 API key 或缺可选依赖，把一次本来完全
+正常的分析在启动时就打断。** 现按 `selected_analysts` 过滤分析师角色；多空 / 风险 /
+Manager 这些不受选择控制的角色照常构建。
+
+### 修复：方向正确率的显著性用错了分母
+
+`direction_accuracy` 排除了 Hold，但"样本是否足够"的判断用的是**已结算总数**。
+20 条已结算里只有 1 条有方向时，噪音提示被抑制，报告却敢显示「方向正确率 100%」。
+现在这个指标单独用 `directional_count` 判显著性，并给出专门的提示。
+
+### 测试
+
+329 passed / 13 skipped / **0 failed**（新增 7 例）。
+
+---
+
 ## [0.5.7] — 2026-08-09
 
 ### 文档：`pip` 与 Python 版本对不上的排错（[#92](https://github.com/simonlin1212/TradingAgents-astock/issues/92)）

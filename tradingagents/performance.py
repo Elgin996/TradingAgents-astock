@@ -211,8 +211,14 @@ def summarize(entries: List[dict]) -> Dict[str, Any]:
         "total_decisions": total,
         "pending": pending,
         "resolved": len(records),
-        # 样本太小的时候必须自己说出来，不能等用户自己去数
+        # 样本太小的时候必须自己说出来，不能等用户自己去数。
+        # ⚠️ 分母要各算各的：`direction_accuracy` 只统计有方向的评级（Hold 不计入），
+        # 拿"已结算总数"给它做显著性判据会高估——20 条已结算里只有 1 条有方向时，
+        # 提示被抑制，报告却敢显示"方向正确率 100%"。
         "sample_is_meaningful": len(records) >= MIN_MEANINGFUL_SAMPLE,
+        "direction_sample_is_meaningful": (
+            overall.directional_count >= MIN_MEANINGFUL_SAMPLE
+        ),
         "min_meaningful_sample": MIN_MEANINGFUL_SAMPLE,
         "avg_holding_days": statistics.fmean(holdings) if holdings else None,
         "overall": overall.as_dict(),
@@ -261,6 +267,15 @@ def format_report(summary: Dict[str, Any]) -> str:
             f"⚠️ 样本仅 {summary['resolved']} 条，少于 "
             f"{summary['min_meaningful_sample']} 条时下面的比率基本是噪音，"
             f"**不要据此判断这套流程有效或无效**。",
+        ]
+    elif not summary["direction_sample_is_meaningful"]:
+        # 总样本够、但有方向的评级不够——最关键的那个指标仍然不可信，必须单独说
+        lines += [
+            "",
+            f"⚠️ 已结算 {summary['resolved']} 条，但其中**有方向的评级只有 "
+            f"{summary['overall']['directional_count']} 条**（Hold 不计入方向判断）。"
+            f"少于 {summary['min_meaningful_sample']} 条时「方向正确率」基本是噪音，"
+            f"**不要据此判断这套流程准不准**；下面其余比率的样本量以已结算总数为准。",
         ]
 
     o = summary["overall"]

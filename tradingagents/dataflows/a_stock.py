@@ -2084,6 +2084,10 @@ def get_fund_flow(
                 hist_klines = [
                     k for k in hist_klines if k.split(",")[0][:10] <= cutoff
                 ]
+                # 窗口是为了"够回溯到分析日"才放大的，过滤完要裁回承诺的 20 个交易日。
+                # 不裁的话，复盘 90 天前会返回约 40 行——既改变了请求的趋势窗口，
+                # 又把每次情绪工具的返回体撑大一倍。
+                hist_klines = hist_klines[-20:]
 
             if historical and not hist_klines:
                 # 说清楚是"这个日期取不到"，而不是让正文里凭空少一段

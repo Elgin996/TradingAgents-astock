@@ -243,3 +243,30 @@ def test_report_warns_that_up_rate_is_not_accuracy():
     report = format_report(summarize(many(MIN_MEANINGFUL_SAMPLE)))
     assert "方向正确率" in report
     assert "判断正确" in report
+
+
+def test_direction_accuracy_significance_uses_its_own_denominator():
+    """总样本够、但有方向的评级只有 1 条时，必须单独警告。
+
+    `direction_accuracy` 排除了 Hold，拿"已结算总数"做显著性判据会高估——
+    20 条已结算里只有 1 条有方向时，提示被抑制，报告却敢显示"方向正确率 100%"
+    （codex 终轮指出）。
+    """
+    entries = many(MIN_MEANINGFUL_SAMPLE - 1, "Hold", "+1.0%", "+1.0%")
+    entries += [entry("2026-02-01", "600519", "Buy", "+5.0%", "+3.0%")]
+
+    s = summarize(entries)
+    assert s["sample_is_meaningful"] is True          # 总数够
+    assert s["direction_sample_is_meaningful"] is False  # 但有方向的只有 1 条
+    assert s["overall"]["direction_accuracy"] == pytest.approx(1.0)
+
+    report = format_report(s)
+    assert "有方向的评级只有 1 条" in report
+    assert "方向正确率" in report
+
+
+def test_no_direction_warning_when_directional_sample_is_enough():
+    s = summarize(many(MIN_MEANINGFUL_SAMPLE, "Buy", "+5.0%", "+2.0%"))
+
+    assert s["direction_sample_is_meaningful"] is True
+    assert "有方向的评级只有" not in format_report(s)

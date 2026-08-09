@@ -265,3 +265,56 @@ def test_provider_specific_kwargs_not_leaked_to_other_vendors(monkeypatch):
     assert "reasoning_effort" not in by_provider["qwen"], "别家 provider 收到了 openai 专属参数"
     assert by_provider["qwen"]["max_tokens"] == 8000, "通用参数不该被一起过滤掉"
     assert by_provider["openai"]["reasoning_effort"] == "high", "同一家应保留专属参数"
+
+
+def test_unselected_analyst_roles_are_not_instantiated(monkeypatch):
+    """没选中的分析师不会进图，就不该为它建模型。
+
+    否则一个**永远不执行**的节点会因为缺 API key 或缺可选依赖，把一次本来完全
+    正常的分析在启动时就打断（codex 终轮指出）。
+    """
+    from tradingagents.graph import trading_graph as tg
+
+    created = []
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def get_llm(self): return FakeLLM("x")
+
+    monkeypatch.setattr(tg, "create_llm_client",
+                        lambda provider, model, base_url=None, **kw: (
+                            created.append(provider) or FakeClient()))
+    graph = tg.TradingAgentsGraph.__new__(tg.TradingAgentsGraph)
+    graph.config = {
+        "llm_provider": "openai",
+        "role_llms": {
+            "market": {"provider": "qwen", "model": "qwen-plus"},
+            "policy": {"provider": "glm", "model": "glm-4.6"},   # 未选中
+        },
+    }
+
+    resolved = graph._build_role_llms({}, False, selected_analysts=["market"])
+
+    assert "market" in resolved
+    assert "policy" not in resolved
+    assert "glm" not in created, "未选中的分析师角色不该建模型"
+
+
+def test_non_analyst_roles_are_always_built(monkeypatch):
+    """多空/风险/Manager 这些角色不受 selected_analysts 控制，必须照常建。"""
+    from tradingagents.graph import trading_graph as tg
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def get_llm(self): return FakeLLM("x")
+
+    monkeypatch.setattr(tg, "create_llm_client",
+                        lambda provider, model, base_url=None, **kw: FakeClient())
+    graph = tg.TradingAgentsGraph.__new__(tg.TradingAgentsGraph)
+    graph.config = {
+        "llm_provider": "openai",
+        "role_llms": {"bull": {"provider": "qwen", "model": "qwen-plus"}},
+    }
+
+    resolved = graph._build_role_llms({}, False, selected_analysts=["market"])
+    assert "bull" in resolved

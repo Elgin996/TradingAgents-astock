@@ -212,3 +212,43 @@ def test_fund_flow_says_when_history_is_unavailable(monkeypatch):
     out = a_stock.get_fund_flow("600519", PAST)
 
     assert "未能取到" in out
+
+
+def test_profit_forecast_curr_date_is_required():
+    """给默认值等于没设防：模型按 {"ticker": "600519"} 调用时 curr_date 为空串，
+    判定为"非历史"，告警永远不触发（codex 终轮指出）。"""
+    from tradingagents.agents.utils.agent_utils import get_profit_forecast
+
+    required = get_profit_forecast.args_schema.model_json_schema().get("required", [])
+    assert "curr_date" in required
+
+
+def test_fundamentals_prompt_tells_the_model_to_pass_the_date():
+    """工具签名要求了还不够——提示词不提，模型也不会主动传。"""
+    import inspect
+
+    from tradingagents.agents.analysts import fundamentals_analyst
+
+    src = inspect.getsource(fundamentals_analyst.create_fundamentals_analyst)
+    assert "get_profit_forecast(ticker, curr_date)" in src
+    assert "curr_date 必须传" in src
+
+
+def test_fund_flow_history_trimmed_to_twenty_rows(monkeypatch):
+    """窗口为够回溯才放大，过滤后要裁回承诺的 20 个交易日（codex 终轮指出）。
+
+    不裁的话复盘 90 天前会返回约 40 行，既改变了请求的趋势窗口，又把返回体撑大一倍。
+    """
+    rows = [f"2026-{m:02d}-{d:02d},1000,0,0,0,0,0"
+            for m in (3, 4, 5) for d in range(1, 16)]   # 45 行，全部早于 PAST
+
+    def fake_get(url, params=None, timeout=10):
+        if "push2his" in url:
+            return FakeResp({"data": {"klines": rows}})
+        return FakeResp({"data": {"klines": []}})
+
+    monkeypatch.setattr(a_stock, "_em_get", fake_get)
+    out = a_stock.get_fund_flow("600519", PAST)
+
+    kept = [ln for ln in out.splitlines() if ln.strip().startswith("2026-")]
+    assert len(kept) == 20, f"应裁到 20 行，实际 {len(kept)} 行"
