@@ -370,6 +370,11 @@ def _get_mootdx_client():
     saved_bestip = None
     try:
         from mootdx import config as _mootdx_config
+        # 🔴 必须先 setup() 再快照：新进程里 `config.get("BESTIP")` 返回的是模块默认
+        # 空值，用户持久化的服务器要等 `BaseQuotes.__init__` 调 setup() 才被读进来。
+        # 快照到空值的话，"还原"反而会把用户真实配置抹成空——比不还原更糟。
+        # 实测（mootdx 0.11.7）：setup 前 {'HQ': ''}，setup 后 {'HQ': ['218.6.x.x', 7709]}。
+        _mootdx_config.setup()
         saved_bestip = _mootdx_config.get("BESTIP")
         if isinstance(saved_bestip, dict):
             saved_bestip = dict(saved_bestip)

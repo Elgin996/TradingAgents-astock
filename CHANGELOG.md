@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.11] — 2026-08-09
+
+Codex 第六轮：**上一版那两个修复本身都没修对。**
+
+### 修复：BESTIP 快照取到的是空默认值（v0.5.10 的修复无效）
+
+v0.5.10 为了不覆写用户配置，在探测前快照了 `config.get("BESTIP")`。但在新进程里
+**mootdx 要等 `BaseQuotes.__init__` 调 `config.setup()` 之后才把持久化的值读进来**
+——此前 `get("BESTIP")` 返回的是模块默认空值。于是快照到的是空值，一旦全部探测失败，
+"还原"反而**把用户真实配置抹成空**，比不还原更糟。
+
+实测（mootdx 0.11.7）：`setup()` 前 `{'HQ': ''}`，`setup()` 后
+`{'HQ': ['218.6.170.47', 7709]}`。现在快照前先显式 `setup()`。
+
+端到端验证：真实探测 38 台全部失败后，用户配置的服务器完好无损。
+测试也改为复刻真实构造函数语义（旧的假件根本不调 `setup()`，所以抓不到这条）。
+
+### 修复：评级边界仍放行连字符散文（v0.5.10 的修复不完整）
+
+`(?![A-Za-z])` 只挡住了紧跟字母的情况，连字符和数字后缀照样过关：
+
+| 文本 | v0.5.10 | 现在 |
+|---|---|---|
+| `建议：Sell-off risk remains elevated` | Sell ❌ | Hold |
+| `最终评级：Buy-side interest is weak` | Buy ❌ | Hold |
+| `最终评级：Buy2024` | Buy ❌ | Hold |
+
+改为要求评级词后面是**真正的结束**（行尾 / 空白 / 中文 / 常见标点），并先吃掉
+markdown 的收尾星号，`最终评级：**Sell**` 这类正常写法不受影响。
+
+### 测试
+
+340 passed / 13 skipped / **0 failed**（新增 2 例）。
+
+---
+
 ## [0.5.10] — 2026-08-09
 
 Codex 第五轮的两处，都是新增行为自己带出来的副作用。

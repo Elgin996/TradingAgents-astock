@@ -59,11 +59,17 @@ _CN_LABEL_RE = re.compile(_CN_LABEL_PREFIX + r"(" + _CN_ALT + r")")
 # 英文标签规则要求出现 "rating"；中文标签规则只认中文评级词；裸英文词扫描按
 # 空白切分，"最终评级：Buy" 是**一个** token，`strip("*:.,")` 又剥不掉全角冒号。
 # 结果是静默落到默认值 Hold —— 决策评级被悄悄改写，报告里完全看不出来。
-# ⚠️ 末尾的 `(?![A-Za-z])` 不能省：没有词边界时 `最终评级：Buyer interest remains weak`
-# 会被判成 Buy、`建议：Selling pressure is high` 判成 Sell。这类误判会被写进记忆日志，
-# 再污染决策绩效统计——而且从报告里完全看不出来。
+# 评级词后面必须是**真正的结束**：行尾、空白、或中文/常见标点。
+#
+# ⚠️ 只排除下一个字母（`(?![A-Za-z])`）是不够的——`建议：Sell-off risk remains elevated`
+# 和 `最终评级：Buy-side interest is weak` 里连字符能过关，照样被判成 Sell / Buy；
+# `最终评级：Buy2024` 同理。而这些恰恰就是本规则要挡的"标签后跟英文散文"。
+# 这类误判会被写进记忆日志，再污染决策绩效统计，报告里完全看不出来。
+# 先吃掉 markdown 的收尾星号（`最终评级：**Sell**`），再要求真正的结束。
+_RATING_VALUE_END = r"\*{0,2}(?=$|[\s，。；、！？,.;!?)\]}」』】》]|[\u4e00-\u9fff])"
+
 _CN_LABEL_EN_RE = re.compile(
-    _CN_LABEL_PREFIX + r"(" + "|".join(RATINGS_5_TIER) + r")(?![A-Za-z])",
+    _CN_LABEL_PREFIX + r"(" + "|".join(RATINGS_5_TIER) + r")" + _RATING_VALUE_END,
     re.IGNORECASE,
 )
 # Bare Chinese rating term anywhere (last-resort fallback).

@@ -194,3 +194,14 @@ class TestParseRatingWordBoundary:
     def test_chinese_terms_unaffected(self):
         assert parse_rating("最终评级：买入") == "Buy"
         assert parse_rating("最终评级：卖出") == "Sell"
+
+    def test_hyphenated_and_suffixed_prose_rejected(self):
+        """`(?![A-Za-z])` 不够——连字符和数字后缀能过关（codex 第六轮）。"""
+        assert parse_rating("建议：Sell-off risk remains elevated") == "Hold"
+        assert parse_rating("最终评级：Buy-side interest is weak") == "Hold"
+        assert parse_rating("最终评级：Buy2024") == "Hold"
+
+    def test_markdown_bold_rating_still_parses(self):
+        """收紧边界不能误伤 markdown 加粗写法。"""
+        assert parse_rating("最终评级：**Sell**") == "Sell"
+        assert parse_rating("投资建议: **增持**") == "Overweight"

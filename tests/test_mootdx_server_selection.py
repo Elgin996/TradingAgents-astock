@@ -269,12 +269,24 @@ def test_probing_restores_mootdx_bestip_when_nothing_works(handshake_fails, monk
     """
     from mootdx import config as mootdx_config
 
-    original = {"HQ": ("1.2.3.4", 7709), "EX": "", "GP": ""}
-    store = {"BESTIP": dict(original)}
+    original = {"HQ": ["1.2.3.4", 7709], "EX": "", "GP": ""}
+    store = {"BESTIP": {"HQ": "", "EX": "", "GP": ""}}   # 未 setup 时的模块默认空值
+    setup_called = {"n": 0}
+
+    def fake_setup():
+        # 复刻真实语义：setup() 之后才把持久化的值读进来
+        setup_called["n"] += 1
+        store["BESTIP"] = dict(original)
+
+    monkeypatch.setattr(mootdx_config, "setup", fake_setup)
     monkeypatch.setattr(mootdx_config, "get", lambda k: store.get(k))
     monkeypatch.setattr(mootdx_config, "set", lambda k, v: store.__setitem__(k, v))
 
     with pytest.raises(RuntimeError):
         a_stock._get_mootdx_client()
 
+    assert setup_called["n"] >= 1, (
+        "必须先 setup() 再快照——新进程里 config.get('BESTIP') 是模块默认空值，"
+        "快照到空值的话'还原'反而会把用户真实配置抹掉"
+    )
     assert store["BESTIP"] == original, "全部探测失败后应把 BESTIP 还原成原样"
