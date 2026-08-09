@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.7] — 2026-08-09
+
+### 文档：`pip` 与 Python 版本对不上的排错（[#92](https://github.com/simonlin1212/TradingAgents-astock/issues/92)）
+
+用户装了 Python 3.14，`pip install -e .` 却报 `requires a different Python: 3.9.6`。
+**不是仓库问题**：报错里的 3.9.6 就是当前 `pip` 绑定的解释器（macOS 自带的 `pip3`
+常指向系统 3.9），但这句提示本身很容易让人以为是项目要求写错了。
+
+中英文 README 各加一条 FAQ：怎么确认 `pip` 对应哪个解释器（`pip3 -V`）、为什么推荐
+用 `python -m pip` 的写法、以及配合虚拟环境的完整命令（含 Windows 版）。
+
+---
+
 ## [0.5.6] — 2026-08-09
 
 Codex **复审**发现的五处，全部实测复现。复审的价值在这一轮体现得很清楚——其中两条

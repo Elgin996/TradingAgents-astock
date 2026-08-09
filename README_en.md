@@ -356,6 +356,23 @@ Each provider uses **its own environment variable**, not `OPENAI_API_KEY`: DeepS
 **Q: Want to connect to an OpenAI-compatible third-party gateway/relay (9Router, AI Router, self-built proxy) with a custom base_url + model?**
 Use the **「OpenAI-Compatible (Custom base_url)」** option (added in v0.2.20). In the Web sidebar, select it under "LLM Provider" → Manually enter the model name supported by your gateway under "Fast/Deep Think Model ID" → Enter your gateway address under "API Base URL" (e.g., `https://your-relay.example/v1`) → Set `OPENAI_COMPATIBLE_API_KEY=your_key` in `.env` (it also accepts `OPENAI_API_KEY`). For CLI, after selecting `OpenAI-Compatible`, it will prompt for the Base URL. It uses standard Chat Completions (not OpenAI Responses API, for best compatibility), and the model name can be freely entered without being restricted by the built-in list. The equivalent configuration is: `llm_provider="openai_compatible"` + `backend_url="<your_gateway>"` + `deep_think_llm/quick_think_llm="<your_model>"`.
 
+**Q: I have Python 3.12/3.14 installed, but `pip install -e .` says `requires a different Python: 3.9.6 not in '>=3.10'`?**
+The **3.9.6 in that message is the interpreter your current `pip` is bound to** — the newer version you installed is not the one being used (on macOS, the bundled `pip3` often points at the system 3.9). Check which interpreter is running:
+
+```bash
+pip3 -V                    # the path in parentheses is its Python
+python3.12 -m pip -V       # same check for the version you want
+```
+
+Using `python -m pip` avoids the mix-up; a virtualenv is recommended:
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+python -m pip install -e .
+```
+
+On Windows use `py -3.12 -m venv .venv` + `.venv\Scripts\activate`. (#92)
+
 **Q: The report stops halfway through, but the context window was nowhere near full?**
 You are hitting the **output** cap, not the context cap — how many tokens a model may emit in one reply is a separate limit. Since v0.4.1 this truncation is reported in the logs (`因为达到输出上限被截断` / truncated at the output limit) instead of silently handing you half a report. Raise it with `max_tokens` in the config (e.g. `"max_tokens": 16000`) or the `TRADINGAGENTS_MAX_TOKENS` environment variable.
 
