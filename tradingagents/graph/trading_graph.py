@@ -54,6 +54,13 @@ from .propagation import Propagator
 from .reflection import Reflector
 from .signal_processing import SignalProcessor
 
+# 各家 provider 私有的参数：换了 provider 就不能带过去（别家可能直接拒收）。
+_PROVIDER_SPECIFIC_KWARGS = frozenset({
+    "reasoning_effort",   # openai
+    "thinking_level",     # google
+    "effort",             # anthropic
+})
+
 
 def _normalize_yfinance_ticker(ticker: str) -> str:
     """Return the Yahoo Finance symbol for a ticker used by the graph.
@@ -221,6 +228,11 @@ class TradingAgentsGraph:
                     # 带上 callbacks：降级意味着**开始计费**，此时统计/成本回调
                     # 反而看不到这些调用的话，恰好在花钱的时候统计是瞎的。
                     **({"callbacks": self.callbacks} if self.callbacks else {}),
+                    # 用户显式配的输出上限也要带过去。否则撞额度降级之后，降级
+                    # provider 用它自己的默认上限，报告照样被截断——而这正是
+                    # 用户配 max_tokens 想避免的事（#91）。
+                    **({"max_tokens": self.config["max_tokens"]}
+                       if self.config.get("max_tokens") else {}),
                 }
                 return create_llm_client(
                     provider="claude_agent_sdk",
@@ -327,13 +339,23 @@ class TradingAgentsGraph:
             else:
                 base_url = None
 
+            # 主 provider 的**专属**参数不能带给另一家：openai 的
+            # `reasoning_effort`、google 的 `thinking_level`、anthropic 的 `effort`
+            # 都是各家私有的，塞进 qwen / glm / 自建网关的请求体里可能直接被拒。
+            # 通用参数（max_tokens / callbacks 等）保留。
+            role_kwargs = (
+                llm_kwargs if provider.lower() == str(main_provider).lower()
+                else {k: v for k, v in llm_kwargs.items()
+                      if k not in _PROVIDER_SPECIFIC_KWARGS}
+            )
+
             key = (provider.lower(), spec["model"], base_url)
             if key not in cache:
                 cache[key] = create_llm_client(
                     provider=provider,
                     model=spec["model"],
                     base_url=base_url,
-                    **llm_kwargs,
+                    **role_kwargs,
                 ).get_llm()
             resolved[role] = cache[key]
 

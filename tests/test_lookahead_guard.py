@@ -150,3 +150,65 @@ def test_profit_forecast_warns_on_historical_date(monkeypatch):
     out = a_stock.get_profit_forecast("600519", PAST)
 
     assert "未来函数警告" in out
+
+
+# ---------------------------------------------------------------------------
+# codex 复审补：防护要在**生产调用路径**上真的生效
+# ---------------------------------------------------------------------------
+
+
+def test_profit_forecast_tool_exposes_curr_date():
+    """工具不把 curr_date 传下去，数据层的未来函数告警就是死代码。
+
+    v0.5.1 给 get_profit_forecast 加了告警，但 @tool 只暴露 ticker，
+    curr_date 恒为 None → 告警永远不触发，模型照样把今天的一致预期当历史事实。
+    """
+    from tradingagents.agents.utils.agent_utils import get_profit_forecast
+
+    assert "curr_date" in get_profit_forecast.args
+
+
+def test_every_date_aware_tool_forwards_its_date():
+    """凡是数据层按 curr_date 做时点处理的工具，@tool 都必须暴露并转发它。"""
+    import inspect
+
+    from tradingagents.agents.utils import signal_data_tools
+
+    src = inspect.getsource(signal_data_tools)
+    for name in ("get_profit_forecast", "get_fund_flow"):
+        call = f'route_to_vendor("{name}", '
+        idx = src.find(call)
+        assert idx != -1, f"找不到 {name} 的路由调用"
+        line = src[idx:src.find(")", idx)]
+        assert "curr_date" in line, f"{name} 没有把 curr_date 转发给数据层"
+
+
+def test_fund_flow_widens_window_for_older_dates(fake_em, monkeypatch):
+    """分析日早于最近 20 个交易日时，必须放大回溯窗口。
+
+    接口只提供"从今天回溯 lmt 天"，仍只要 20 天的话过滤后一行不剩——
+    把"数据不对"变成"没有数据"，比不过滤更糟（codex P2）。
+    """
+    captured = {}
+    orig = a_stock._em_get
+
+    def spy(url, params=None, timeout=10):
+        if "push2his" in url:
+            captured["lmt"] = params.get("lmt")
+        return orig(url, params=params, timeout=timeout)
+
+    monkeypatch.setattr(a_stock, "_em_get", spy)
+    a_stock.get_fund_flow("600519", PAST)      # PAST = 90 天前
+
+    assert captured["lmt"] > 20, f"回溯窗口没有放大，仍是 {captured.get('lmt')}"
+
+
+def test_fund_flow_says_when_history_is_unavailable(monkeypatch):
+    """过滤后为空要说明原因，不能让正文凭空少一段。"""
+    def empty_hist(url, params=None, timeout=10):
+        return FakeResp({"data": {"klines": []}})
+
+    monkeypatch.setattr(a_stock, "_em_get", empty_hist)
+    out = a_stock.get_fund_flow("600519", PAST)
+
+    assert "未能取到" in out

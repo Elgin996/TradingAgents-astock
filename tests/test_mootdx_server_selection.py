@@ -166,6 +166,8 @@ def handshake_fails(monkeypatch):
     state = {"factory_calls": [], "bestip_used": False}
 
     monkeypatch.setattr(a_stock, "_TDX_SERVERS", servers)
+    # 候选表 = 精选表 + mootdx 自带主机表；测试里只保留精选表，断言才可控
+    monkeypatch.setattr(a_stock, "_candidate_tdx_servers", lambda: list(servers))
     monkeypatch.setattr(a_stock, "_mootdx_client", None)
     monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", 0.0)
     monkeypatch.setattr(a_stock, "_probe_tdx", lambda ip, port, timeout=2.0: True)
@@ -233,25 +235,25 @@ def test_bestip_skipped_when_protocol_is_the_problem(handshake_fails):
     assert handshake_fails["bestip_used"] is False
 
 
-def test_bestip_still_used_when_nothing_is_reachable(monkeypatch):
-    """反过来：内置表整体 TCP 都不通（IP 老化）时，bestip 仍要跑——那正是它的用途。"""
-    import mootdx.quotes
+def test_candidate_list_includes_mootdx_own_hosts():
+    """候选表必须覆盖 mootdx 自带主机表，而不只是精选的那 10 台。
 
-    monkeypatch.setattr(a_stock, "_TDX_SERVERS", [("10.0.0.1", 7709)])
-    monkeypatch.setattr(a_stock, "_mootdx_client", None)
-    monkeypatch.setattr(a_stock, "_mootdx_unavailable_until", 0.0)
-    monkeypatch.setattr(a_stock, "_probe_tdx", lambda ip, port, timeout=2.0: False)
-    used = {"bestip": False}
+    只试精选表的话，它们恰好都不可用时会被判成"全网不可达"并记 5 分钟负缓存，
+    而 mootdx 自带表里可能还有活着的主机（codex 复审指出）。
+    """
+    candidates = a_stock._candidate_tdx_servers()
 
-    class FakeQuotes:
-        @staticmethod
-        def factory(market="std", server=None, **kwargs):
-            if kwargs.get("bestip"):
-                used["bestip"] = True
-            raise ConnectionResetError("nope")
+    assert len(candidates) > len(a_stock._TDX_SERVERS)
+    assert candidates[:len(a_stock._TDX_SERVERS)] == list(a_stock._TDX_SERVERS), (
+        "实测精选的服务器应排在前面，让常见情况第一台就命中"
+    )
+    assert len(candidates) == len(set(candidates)), "候选表不该有重复"
 
-    monkeypatch.setattr(mootdx.quotes, "Quotes", FakeQuotes)
-    with pytest.raises(RuntimeError, match="没有一台"):
+
+def test_bestip_is_never_used(handshake_fails):
+    """不再用 bestip：它要把整张表测速一遍（实测几分钟），而候选表已逐台验证过，
+    覆盖面相当且每台都是"真取到数才算通过"。"""
+    with pytest.raises(RuntimeError):
         a_stock._get_mootdx_client()
 
-    assert used["bestip"] is True
+    assert handshake_fails["bestip_used"] is False

@@ -6,17 +6,24 @@ from tradingagents.dataflows.interface import route_to_vendor
 @tool
 def get_profit_forecast(
     ticker: Annotated[str, "A-stock code (e.g. 688017)"],
+    curr_date: Annotated[str, "Analysis date in YYYY-MM-DD format"] = "",
 ) -> str:
     """
     Retrieve consensus EPS forecasts with forward valuation metrics.
     Returns analyst coverage count, EPS range, forward PE, PEG, and PE digestion time.
     Uses the configured signal_data vendor.
+
+    ⚠️ curr_date 必须传：一致预期只有"当前"版本，没有历史时点值。数据层靠这个
+    参数判断是不是在复盘历史，并在正文顶部加未来函数告警。不传的话告警永远不会
+    触发，模型会把今天的预测当成分析日当天的事实（v0.5.5 修）。
+
     Args:
         ticker (str): A-stock code
+        curr_date (str): Analysis date, used to flag look-ahead when historical
     Returns:
         str: Consensus forecast report with valuation metrics
     """
-    return route_to_vendor("get_profit_forecast", ticker)
+    return route_to_vendor("get_profit_forecast", ticker, curr_date)
 
 
 @tool

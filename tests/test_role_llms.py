@@ -229,3 +229,39 @@ def test_warns_when_bypassing_subscription(monkeypatch, caplog):
         build(cfg, monkeypatch, subscription_on=True)
 
     assert any("bear" in r.getMessage() and "计费" in r.getMessage() for r in caplog.records)
+
+
+# ---------------------------------------------------------------------------
+# codex 复审补的两条
+# ---------------------------------------------------------------------------
+
+
+def test_provider_specific_kwargs_not_leaked_to_other_vendors(monkeypatch):
+    """openai 的 reasoning_effort 不能带给 qwen —— 别家可能直接拒收这个参数。"""
+    from tradingagents.graph import trading_graph as tg
+
+    created = []
+
+    class FakeClient:
+        def __init__(self, **kw): pass
+        def get_llm(self): return FakeLLM("x")
+
+    def fake_create(provider, model, base_url=None, **kwargs):
+        created.append((provider, kwargs))
+        return FakeClient()
+
+    monkeypatch.setattr(tg, "create_llm_client", fake_create)
+    graph = tg.TradingAgentsGraph.__new__(tg.TradingAgentsGraph)
+    graph.config = {
+        "llm_provider": "openai",
+        "role_llms": {
+            "bull": {"provider": "qwen", "model": "qwen-plus"},
+            "bear": {"model": "gpt-5.4-mini"},          # 同一家，应保留
+        },
+    }
+    graph._build_role_llms({"reasoning_effort": "high", "max_tokens": 8000}, False)
+
+    by_provider = {p: kw for p, kw in created}
+    assert "reasoning_effort" not in by_provider["qwen"], "别家 provider 收到了 openai 专属参数"
+    assert by_provider["qwen"]["max_tokens"] == 8000, "通用参数不该被一起过滤掉"
+    assert by_provider["openai"]["reasoning_effort"] == "high", "同一家应保留专属参数"

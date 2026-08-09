@@ -6,6 +6,62 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.6] — 2026-08-09
+
+Codex **复审**发现的五处，全部实测复现。复审的价值在这一轮体现得很清楚——其中两条
+正是上一版修复自己留下的洞。
+
+### 修复：未来函数告警在生产路径上是死代码
+
+v0.5.1 给 `get_profit_forecast` 加了未来函数告警，但它的 LangChain `@tool` 只暴露
+`ticker`，`route_to_vendor` 也只传 `ticker` —— `curr_date` 恒为 `None`，判定永远为
+False，**告警一次都不会触发**。模型照样把今天的一致预期当成分析日当天的事实。
+（审计发现只有这一个工具漏传，其余 16 个都正常。）
+
+现已补上参数与转发，并加测试锁死"凡是数据层按 `curr_date` 做时点处理的工具，
+`@tool` 都必须暴露并转发它"。
+
+### 修复：历史资金流被过滤成一条不剩
+
+东财日线资金流接口只提供"从今天回溯 N 个交易日"，没有 end_date。v0.5.1 仍固定要
+20 天再按 `curr_date` 过滤 —— 复盘一个较早的日期时，返回的 20 行全在分析日之后，
+**过滤后一行不剩**。把"数据不对"变成了"没有数据"，比不过滤更糟；而当时的测试夹具
+恰好返回了一条真实请求不会包含的旧数据，把这个问题盖住了。
+
+现按分析日与今天的间隔放大回溯窗口（上限 500，约两年），并在确实取不到时**明说原因**，
+不让正文凭空少一段。
+
+### 修复：mootdx 只试 10 台就判"全网不可达"
+
+v0.5.5 为了规避 bestip 的全表测速而跳过了它，但这样一来 mootdx 自带主机表里的其余
+28 台就永远试不到 —— 精选的 10 台恰好都不可用时会被误判成协议被拦，还记 5 分钟负缓存。
+
+- **候选表扩为 38 台**（精选 10 台在前 + mootdx 自带主机表去重），逐台真实取数验证，
+  覆盖面等同 bestip 而不做它那套要跑几分钟的测速。
+- **TCP 预筛改为并发**：多数候选是"连都连不上"，串行要等满每个超时。并发只是把等 IO
+  并行化，不改变选取顺序，精选表依旧优先。
+- 实测全表不可用时：**73.7s → 27.0s**（v0.5.5 是 23.7s 但只覆盖 10 台；最初 >170s）。
+  二次调用命中负缓存 0ms。
+
+### 修复：角色模型串味 —— 主 provider 的专属参数被带给别家
+
+`role_llms` 给某个角色配了别家 provider 时，仍复用主 provider 的 `llm_kwargs`。
+`reasoning_effort`（openai）/ `thinking_level`（google）/ `effort`（anthropic）都是
+各家私有参数，塞进 qwen / glm / 自建网关的请求体里可能被直接拒收。现按角色 provider
+过滤，通用参数（`max_tokens` / `callbacks`）保留。
+
+### 修复：订阅降级后 `max_tokens` 丢失
+
+开着 Claude 订阅覆盖时，`max_tokens` 只进了 `llm_kwargs`，没进 `fallback_spec`。
+撞额度降级到付费 provider 后，那边用自己的默认上限——报告照样被截断，而这正是用户
+配 `max_tokens` 想避免的事。
+
+### 测试
+
+322 passed / 13 skipped / **0 failed**（新增 6 例）。
+
+---
+
 ## [0.5.5] — 2026-08-09
 
 Codex 审计后的五处修复。全部实测复现，无一误报。

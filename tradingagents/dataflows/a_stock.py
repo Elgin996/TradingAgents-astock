@@ -255,6 +255,43 @@ _mootdx_unavailable_until = 0.0
 # 大头是 bestip 全表测速，那个已经单独规避了。
 
 
+def _candidate_tdx_servers() -> list[tuple[str, int]]:
+    """待试的通达信服务器：先用实测精选的 `_TDX_SERVERS`，再补 mootdx 自带的完整主机表。
+
+    只试精选的那 10 台是不够的——它们要是恰好都不可用，而 mootdx 自带表里还有活着的
+    主机，就会被判成"全网不可达"并记 5 分钟负缓存。这里把两张表合起来去重后逐台验证，
+    覆盖面等同 `bestip`，但不做它那套要跑几分钟的全表测速。
+    """
+    servers = list(_TDX_SERVERS)
+    seen = set(servers)
+    try:
+        from mootdx.consts import HQ_HOSTS
+        for entry in HQ_HOSTS:
+            # 形如 ("深圳双线主站1", "110.41.147.114", 7709)
+            host = (entry[1], entry[2]) if len(entry) >= 3 else None
+            if host and host not in seen:
+                seen.add(host)
+                servers.append(host)
+    except Exception as e:  # mootdx 版本变动导致取不到就只用精选表，不影响主流程
+        logger.debug("读取 mootdx HQ_HOSTS 失败，仅使用内置精选表：%s", e)
+    return servers
+
+
+def _reachable_tdx_servers(servers, timeout: float = 2.0):
+    """并发做 TCP 预筛，返回可连的那些（保持原顺序）。
+
+    只是把"等超时"这件事并行化，不改变优先级：返回顺序仍是候选表顺序，所以实测
+    精选的服务器依旧排在前面、依旧第一个被真实验证。
+    """
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not servers:
+        return []
+    with ThreadPoolExecutor(max_workers=min(16, len(servers))) as pool:
+        flags = list(pool.map(lambda s: _probe_tdx(s[0], s[1], timeout), servers))
+    return [srv for srv, ok in zip(servers, flags) if ok]
+
+
 def _probe_tdx(ip: str, port: int, timeout: float = 2.0) -> bool:
     """TCP 握手探测通达信服务器端口是否开着。
 
@@ -313,10 +350,13 @@ def _get_mootdx_client():
 
     from mootdx.quotes import Quotes
 
+    # TCP 预筛并发跑：38 台里多数是"连都连不上"，串行每台要等满超时（实测整轮
+    # 73.7s，首次调用像卡死）。预筛纯粹是等 IO，并发不改变选取语义——下面仍按
+    # 原顺序、逐台做真实取数验证，精选表依旧优先。
+    reachable = _reachable_tdx_servers(_candidate_tdx_servers())
+
     tcp_ok_but_dead = 0
-    for ip, port in _TDX_SERVERS:
-        if not _probe_tdx(ip, port):
-            continue
+    for ip, port in reachable:
         # 「TCP 通但通达信协议不通」有两种表现：factory 建连时握手就被拒，
         # 或者建出来了但取不到数。**两种都要算**——只统计后者的话，计数永远是 0
         # （实测这批服务器全是在 factory 里抛 ConnectionReset），下面的快速失败
@@ -335,12 +375,11 @@ def _get_mootdx_client():
             logger.debug("mootdx %s:%s 建连成功但取不到数，换下一台", ip, port)
 
 
-    # fallback。bestip 会把 mootdx 内置主机表整个测速一遍，实测要几分钟，所以
-    # **只在内置表整体连不上时才值得跑**——那才是它要解决的问题（IP 老化）。
-    # 如果 TCP 明明连得上、只是通达信协议被拒，bestip 用的是同一套协议、同一批
-    # 主机，不可能有别的结果，跑它纯粹是让用户白等几分钟（#90）。
-    fallbacks = [{}] if tcp_ok_but_dead else [{"bestip": True}, {}]
-    for kwargs in fallbacks:
+    # 最后再试一次裸 factory（老用户的 mootdx config 里可能已存了可用 IP）。
+    # ⚠️ 刻意**不用** `bestip=True`：它会把整张主机表做一遍测速，实测要几分钟。
+    # 上面 `_candidate_tdx_servers()` 已经把 mootdx 自带的完整主机表逐台验证过了，
+    # 覆盖面不比 bestip 差，而且每台都是"真取到数才算通过"。
+    for kwargs in ({},):
         try:
             candidate = Quotes.factory(market="std", **kwargs)
         except Exception as e:
@@ -2019,8 +2058,18 @@ def get_fund_flow(
                 "https://push2his.eastmoney.com"
                 "/api/qt/stock/fflow/daykline/get"
             )
+            # 接口返回的是"从今天回溯 lmt 个交易日"，没有 end_date 参数。复盘一个
+            # 较早的日期时，若仍只要 20 天，过滤后会**一行不剩**——把"数据不对"
+            # 变成"没有数据"，比不过滤更糟。按分析日与今天的间隔把窗口放大到能
+            # 覆盖到那一段（上限 500，够回溯约两年）。
+            hist_limit = 20
+            if historical:
+                gap_days = (datetime.now() - datetime.strptime(
+                    str(curr_date)[:10], "%Y-%m-%d")).days
+                # 日历日 → 交易日约 ×0.7，再多留 20 天余量
+                hist_limit = min(500, 20 + int(gap_days * 0.7) + 20)
             params_hist = {
-                "secid": secid, "lmt": 20, "klt": 101,
+                "secid": secid, "lmt": hist_limit, "klt": 101,
                 "fields1": "f1,f2,f3,f7",
                 "fields2": "f51,f52,f53,f54,f55,f56,f57",
             }
@@ -2036,7 +2085,14 @@ def get_fund_flow(
                     k for k in hist_klines if k.split(",")[0][:10] <= cutoff
                 ]
 
-            if hist_klines:
+            if historical and not hist_klines:
+                # 说清楚是"这个日期取不到"，而不是让正文里凭空少一段
+                lines.append(
+                    f"\n## Historical Daily Fund Flow\n"
+                    f"（{str(curr_date)[:10]} 及之前的资金流未能取到：该接口只提供"
+                    f"从今天回溯的窗口，分析日过早时可能已超出可回溯范围。）"
+                )
+            elif hist_klines:
                 lines.append(
                     f"\n## Historical Daily Fund Flow "
                     f"(last {len(hist_klines)} trading days"
