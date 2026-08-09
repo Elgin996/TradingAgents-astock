@@ -27,6 +27,7 @@ from tradingagents.dataflows.config import set_config
 # Import the new abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
     get_stock_data,
+    get_index_data,
     get_indicators,
     get_fundamentals,
     get_balance_sheet,
@@ -255,8 +256,9 @@ class TradingAgentsGraph:
         return {
             "market": ToolNode(
                 [
-                    # Core stock data tools
+                    # Core stock / index data tools
                     get_stock_data,
+                    get_index_data,
                     # Technical indicators
                     get_indicators,
                 ]
@@ -361,19 +363,17 @@ class TradingAgentsGraph:
             _normalize_ohlcv_dates,
             _requests,
             _json,
-            _SH_INDEX_CODES,
+            _index_symbol,
         )
+        from tradingagents.dataflows.index_catalog import INDEX_EXCHANGE_BY_CODE
 
         code = str(index_code).strip()
         if not code:
             return pd.DataFrame()
 
-        if code.startswith("399"):
-            prefixes = ("sz", "sh")
-        elif code in _SH_INDEX_CODES or code.startswith("000"):
-            prefixes = ("sh", "sz")
-        else:
-            prefixes = ("sh", "sz")
+        preferred = _index_symbol(code)[:2]
+        alternate = "sz" if preferred == "sh" else "sh"
+        prefixes = (preferred, alternate)
 
         url = (
             "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"

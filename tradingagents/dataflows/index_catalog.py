@@ -35,6 +35,19 @@ _INDEX_CATALOG: dict[str, tuple[str, str]] = {
     "上证红利": ("000015", "SSE"),
 }
 
+
+def _provider_prefix(code: str, provider: str) -> str:
+    if code.startswith("399") or provider == "SZSE":
+        return "sz"
+    return "sh"
+
+
+# code -> sh/sz. Must stay in sync with catalog values (asserted in tests).
+INDEX_EXCHANGE_BY_CODE: dict[str, str] = {
+    code: _provider_prefix(code, provider)
+    for code, provider in {pair for pair in _INDEX_CATALOG.values()}
+}
+
 _NOISE = re.compile(
     r"(价格指数|全收益指数|净收益指数|指数|收益率)$"
 )

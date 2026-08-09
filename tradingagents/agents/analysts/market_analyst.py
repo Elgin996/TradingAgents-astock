@@ -3,6 +3,7 @@ from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     build_evidence_lexicon,
     get_indicators,
+    get_index_data,
     get_language_instruction,
     get_stock_data,
 )
@@ -26,6 +27,8 @@ def create_market_analyst(llm):
             get_stock_data,
             get_indicators,
         ]
+        if state.get("analysis_mode") == "etf":
+            tools = [get_stock_data, get_index_data, get_indicators]
 
         system_message = (
             f"""你是一位专注于 A 股市场的技术分析师。你的任务是从以下技术指标中选择最多 **8 个**最相关的指标，为给定标的提供技术面分析。选择时应注重指标间的互补性，避免冗余。
@@ -75,8 +78,8 @@ MACD 类：
 4. 至少 3 个技术指标的当前数值和多空信号
 5. 关键支撑位和阻力位"""
             + (
-                "\n6. ETF 模式下，若标的上下文给出跟踪指数代码，也调用同一行情工具"
-                "比较区间走势；无法取得时明确标注，不能猜测跟踪偏离。"
+                "\n6. ETF 模式下，若标的上下文给出跟踪指数代码，调用 get_index_data "
+                "（不要用 get_stock_data）比较区间走势；无法取得时明确标注，不能猜测跟踪偏离。"
                 if state.get("analysis_mode") == "etf"
                 else ""
             )

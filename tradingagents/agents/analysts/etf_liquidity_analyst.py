@@ -19,14 +19,16 @@ def create_etf_liquidity_analyst(llm):
             ("system", """You are an ETF liquidity and trading analyst. Use only the
 provided ETF OHLCV and quote tools. Distinguish secondary-market turnover from
 primary-market subscriptions. Do not infer fund flows when shares are unavailable.
-Report latest volume/amount when published, 5/20-day liquidity context, zero or
-unusually low trading days, turnover status, and execution risks. Include source
-dates and a Markdown summary table. Mark unavailable fields as [数据缺失: field].
+Report latest volume/amount when published, 5/20-day liquidity context over about
+{lookback} calendar days of market data, zero or unusually low trading days,
+turnover status, and execution risks. Include source dates and a Markdown summary
+table. Mark unavailable fields as [数据缺失: field].
 {instrument_context}\nCurrent date: {trade_date}.\n{language}"""),
             MessagesPlaceholder(variable_name="messages"),
         ]).partial(
             instrument_context=build_instrument_context(ticker, state.get("instrument_profile")),
             trade_date=trade_date,
+            lookback=lookback,
             language=get_language_instruction(),
         )
         result = (prompt | llm.bind_tools(tools)).invoke(state["messages"])

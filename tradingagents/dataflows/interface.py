@@ -26,6 +26,7 @@ from .alpha_vantage_common import AlphaVantageRateLimitError
 from .a_stock import (
     resolve_ticker,
     get_stock_data as get_astock_stock_data,
+    get_index_data as get_astock_index_data,
     get_indicators as get_astock_indicators,
     get_fundamentals as get_astock_fundamentals,
     get_balance_sheet as get_astock_balance_sheet,
@@ -60,7 +61,8 @@ TOOLS_CATEGORIES = {
     "core_stock_apis": {
         "description": "OHLCV stock price data",
         "tools": [
-            "get_stock_data"
+            "get_stock_data",
+            "get_index_data",
         ]
     },
     "technical_indicators": {
@@ -125,6 +127,9 @@ VENDOR_METHODS = {
         "a_stock": get_astock_stock_data,
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
+    },
+    "get_index_data": {
+        "a_stock": get_astock_index_data,
     },
     # technical_indicators
     "get_indicators": {

@@ -2,7 +2,8 @@ from langchain_core.messages import HumanMessage, RemoveMessage
 
 # Import tools from separate utility files
 from tradingagents.agents.utils.core_stock_tools import (
-    get_stock_data
+    get_stock_data,
+    get_index_data,
 )
 from tradingagents.agents.utils.technical_indicators_tools import (
     get_indicators
@@ -172,17 +173,87 @@ def build_trading_constraints(analysis_mode: str, instrument_profile: dict | Non
         "Beijing Stock Exchange 100 shares minimum\n"
         "- Trading hours (Beijing time): call auction 09:15-09:25, continuous "
         "09:30-11:30 / 13:00-14:57, closing auction 14:57-15:00, after-hours "
-        "fixed-price session 15:05-15:30"
+        "fixed-price session 15:05-15:30\n"
+        "- ST/delisting risk: ST or *ST status signals regulatory warning; factor into position sizing\n"
+        "- Margin eligibility: not all A-shares are margin-eligible; assume cash-only unless stated"
     )
 
 
 def build_risk_framework(analysis_mode: str, posture: str) -> str:
-    """Return the small mode-dependent risk block injected into one shared prompt."""
+    """Return the mode-dependent risk framework injected into one shared prompt."""
     if analysis_mode != "etf":
         return {
-            "aggressive": "Consider A-share policy support, momentum, Northbound flow, and valuation upside.",
-            "conservative": "Consider T+1, price-limit traps, policy reversals, lockups, hot-money exits, and valuation risk.",
-            "neutral": "Balance T+1, policy sensitivity, sector rotation, valuation, and position sizing.",
+            "aggressive": (
+                "A-Share Aggressive Framework — leverage these China-specific upside arguments:\n"
+                "- Limit-Up Momentum (涨停板效应): In A-shares, consecutive limit-ups create powerful "
+                "momentum; T+1 actually helps by preventing same-day profit-taking, allowing multi-day runs\n"
+                "- Policy-Driven Sectors: When Beijing backs a sector (e.g. AI, chips, new energy), the "
+                "policy put is real — government support creates a floor that doesn't exist in Western markets\n"
+                "- Hot Money Conviction: When top hot money seats (游资席位) pile in with strong reason "
+                "tags, the short-term upside can be explosive; missing these moves is also a risk\n"
+                "- Northbound Validation: If foreign institutions via Stock Connect are net buying "
+                "alongside domestic momentum, this dual confirmation is a strong signal\n"
+                "- PE Expansion Phase: In A-share bull cycles, PEs routinely expand to 50-100x for "
+                "thematic leaders; applying US-market valuation discipline too early means missing the main move\n"
+                "- Retail Sentiment Tailwind: A-shares are 80% retail; when sentiment turns positive, the "
+                "herd effect amplifies gains far beyond what fundamentals alone would suggest"
+            ),
+            "conservative": (
+                "A-Share Conservative Framework — emphasize these China-specific downside risks:\n"
+                "- T+1 Settlement Lock: Any position taken today CANNOT be exited until tomorrow. If the "
+                "stock gaps down at open (e.g. after overnight policy news or global sell-off), losses are "
+                "locked in with no recourse. This is the single most important structural risk in A-shares.\n"
+                "- Daily Price Limit Trap (涨跌停板): If a stock hits limit-down (main board -10%, "
+                "STAR/ChiNext -20%, Beijing Stock Exchange -30%), the order book on the buy side is "
+                "typically empty, so sell orders queue but rarely fill. Since 2026-07-06 the after-hours "
+                "fixed-price session (15:05-15:30, at the closing price) covers all A-shares, so exiting is "
+                "not strictly impossible — but it still depends on finding a counterparty, which is exactly "
+                "what is missing on a limit-down day. Treat it as \"effectively trapped\", not \"literally "
+                "unable to place an order\". Multiple consecutive limit-downs can cause catastrophic losses "
+                "with no practical ability to exit.\n"
+                "- Lockup Expiry Overhang: Large lockup expiries (限售解禁) create massive potential sell "
+                "pressure. Even if insiders haven't started selling, the OPTION to sell depresses sentiment "
+                "and caps upside.\n"
+                "- Policy Reversal Risk: A-shares are a policy market (政策市). What the government gives, "
+                "it can take away overnight — sector support can turn to sector crackdown with a single "
+                "State Council directive.\n"
+                "- Hot Money Exit Risk (游资撤退): Hot money moves fast in both directions. Today's "
+                "limit-up star is tomorrow's limit-down casualty. Retail investors are the last to know "
+                "when hot money exits.\n"
+                "- Valuation Discipline: PE > 50x with PEG > 2 is speculative territory regardless of "
+                "growth narrative. The 30x PE digestion framework should be the anchor — if it takes 5+ "
+                "years to digest, the position is overvalued.\n"
+                "- ST/Delisting Risk: For companies with consecutive losses, ST designation signals "
+                "regulatory risk warning, restricts which investors may buy (a risk-warning-board "
+                "permission is required), removes the stock from margin-trading eligibility, and often "
+                "triggers institutional forced selling. Note it does NOT narrow the daily band: main-board "
+                "ST/*ST is ±10% since 2026-07-06, and STAR/ChiNext ST/*ST is ±20%. The danger is the "
+                "delisting path and the shrinking buyer pool, not a tighter price limit."
+            ),
+            "neutral": (
+                "A-Share Neutral Framework — use these China-specific balancing considerations:\n"
+                "- T+1 as Double-Edged Sword: T+1 locks in losses (conservative point) BUT also prevents "
+                "panic selling and allows multi-day momentum to develop (aggressive point). The neutral "
+                "view: size positions so that a single overnight gap-down is survivable.\n"
+                "- Policy Sensitivity Calibration: Not all policy signals are equal. Distinguish between "
+                "top-level State Council directives (high conviction) vs local government incentives "
+                "(lower reliability) vs market rumors (noise). Weight your risk assessment accordingly.\n"
+                "- Northbound Flow as Smart Money Gauge: Foreign institutional flow via Stock Connect is "
+                "more informed than retail flow, but also more fickle — they exit faster than domestic "
+                "funds. Use it as a confirming signal, not a primary thesis.\n"
+                "- Valuation Band Approach: Rather than rigid \"PE > 30x is expensive\" or \"PE doesn't "
+                "matter in growth\", propose a valuation band — what PE range is defensible given the "
+                "earnings trajectory? Use the PE digestion timeframe as a practical anchor.\n"
+                "- Lockup Expiry Timing: The neutral view is not to panic at lockup dates but to monitor "
+                "actual reduction filings (减持公告). The risk is real but the timing is uncertain — "
+                "reducing exposure gradually near lockup windows is more sensible than binary all-in/all-out.\n"
+                "- Sector Rotation Awareness: A-share themes rotate fast (typically 2-4 weeks). The "
+                "neutral question is: where are we in the rotation cycle? Early rotation = room to run; "
+                "late rotation = reduced upside with elevated downside.\n"
+                "- Position Sizing over Direction: In a market with ±10-20% daily limits and T+1 "
+                "settlement, position sizing is more important than directional conviction. A moderate "
+                "position captures upside while limiting locked-in loss scenarios."
+            ),
         }[posture]
     return {
         "aggressive": (
@@ -252,8 +323,34 @@ def build_debate_framework(analysis_mode: str, side: str) -> str:
             ),
         }[side]
     return {
-        "bull": "Bull thesis: policy tailwinds, momentum, fundamentals, and positive market signals.",
-        "bear": "Bear thesis: policy headwinds, valuation risk, momentum reversal, and company-specific downside.",
+        "bull": (
+            "A-Share Bull Framework — prioritize these China-specific bullish catalysts:\n"
+            "- Policy Tailwinds: Government subsidies, industry support policies (e.g. \"专精特新\", "
+            "national strategic sectors), favorable regulatory signals from CSRC/State Council\n"
+            "- Northbound Capital (北向资金): Sustained net inflow from Hong Kong Stock Connect "
+            "indicates foreign institutional conviction\n"
+            "- Hot Money Momentum (游资接力): Consecutive limit-ups with volume confirmation, strong "
+            "theme attribution (reason tags), sector rotation just beginning\n"
+            "- Valuation Growth Story: Use forward PE, PEG, and PE digestion timeframe (30x anchor for "
+            "A-stock growth stocks) to argue the current premium is justified by earnings trajectory\n"
+            "- Lockup Expiry Cleared: If major lockup periods have passed or insiders are NOT reducing, "
+            "this removes a key overhang"
+        ),
+        "bear": (
+            "A-Share Bear Framework — prioritize these China-specific risk factors:\n"
+            "- Policy Headwinds: Sudden regulatory crackdowns (e.g. industry rectification, antitrust), "
+            "CSRC window guidance (窗口指导), sector-wide trading restrictions, or political risk signals\n"
+            "- Lockup & Insider Selling: Upcoming lockup expiry dates with large overhang, controlling "
+            "shareholders in pre-disclosure reduction windows, equity pledge liquidation risk\n"
+            "- Hot Money Withdrawal (游资撤退): Volume divergence after limit-ups (放量滞涨), declining "
+            "limit-up board count (连板断裂), sector rotation moving away from this theme\n"
+            "- Valuation Bubble: PE far above 30x A-stock growth anchor with EPS unable to digest within "
+            "3 years, PEG > 2 indicating overpriced growth, retail-driven speculative premium\n"
+            "- T+1 Trap: After a sharp rally, buyers today cannot exit until tomorrow — if sentiment "
+            "reverses overnight or a gap-down opens, losses are locked in\n"
+            "- Northbound Retreat: Net outflow from Stock Connect signals foreign institutions reducing "
+            "exposure"
+        ),
     }[side]
 
 def create_msg_delete():

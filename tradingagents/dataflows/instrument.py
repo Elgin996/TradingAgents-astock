@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from .security_master import FundMasterRecord, with_user_supplied_tracking_index_code
 
-DataStatus = Literal["ok", "stale", "missing", "unsupported", "error", "assumed"]
+DataStatus = Literal["ok", "stale", "missing", "unsupported", "error", "assumed", "derived"]
 
 
 @dataclass(frozen=True)
@@ -98,7 +98,7 @@ def profile_from_fund_master(
             status="ok",
             notes=record.tracking_index_code_source,
         ),
-        profile_as_of=datetime.now().date().isoformat(),
+        profile_as_of=datetime.now(timezone.utc).date().isoformat(),
         source="mootdx securities master + Eastmoney fund profile",
         fund_manager=DataPoint(
             record.fund_manager, None, None, retrieved_at, "Eastmoney FundF10",

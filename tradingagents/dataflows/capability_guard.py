@@ -20,6 +20,7 @@ _active_capabilities: ContextVar[frozenset[str] | None] = ContextVar(
 
 TOOL_CAPABILITIES: dict[str, str] = {
     "get_stock_data": "price_history",
+    "get_index_data": "price_history",
     "get_indicators": "technical_indicators",
     "get_news": "index_news_policy",
     "get_global_news": "index_news_policy",

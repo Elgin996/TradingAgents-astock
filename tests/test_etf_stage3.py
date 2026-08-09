@@ -1,6 +1,9 @@
 import json
+from datetime import datetime, timezone
 
 from tradingagents.dataflows import etf_data
+
+_TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 from tradingagents.dataflows.analysis_capabilities import AnalysisCapabilities
 from tradingagents.dataflows.capability_guard import (
     CapabilityError,
@@ -74,7 +77,7 @@ def test_structure_alerts_detect_share_spike_and_skip_closed_rules(monkeypatch):
         lambda codes: {codes[0]: {"turnover_pct": 0.05, "price": 1.0}},
     )
 
-    payload = json.loads(etf_data.get_etf_structure_alerts("510300"))
+    payload = json.loads(etf_data.get_etf_structure_alerts("510300", _TODAY))
     alerts = payload["structure_alerts"]["value"]["alerts"]
     rules = {item["rule"] for item in alerts}
     assert "share_change_spike" in rules
@@ -113,7 +116,7 @@ def test_peer_comparison_excludes_closed_fields(monkeypatch):
         ),
     )
 
-    payload = json.loads(etf_data.get_etf_peer_comparison("510300", max_peers=4))
+    payload = json.loads(etf_data.get_etf_peer_comparison("510300", _TODAY, max_peers=4))
     point = payload["peer_comparison"]
     assert point["status"] == "ok"
     assert "premium_discount" in point["value"]["excluded_fields"]

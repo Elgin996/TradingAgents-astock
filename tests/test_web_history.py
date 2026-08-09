@@ -9,16 +9,15 @@ from web import history
 
 
 def test_history_uses_configured_results_directory(tmp_path, monkeypatch):
+    """Primary case: production writer dumps a flat state dict (no date wrapper)."""
     logs = tmp_path / "project-data" / "logs"
     log_dir = logs / "600370" / "TradingAgentsStrategy_logs"
     log_dir.mkdir(parents=True)
     (log_dir / "full_states_log_2026-06-02.json").write_text(
         json.dumps(
             {
-                "2026-06-02": {
-                    "final_trade_decision": "HOLD",
-                    "analysis_mode": "stock",
-                }
+                "final_trade_decision": "HOLD",
+                "analysis_mode": "stock",
             }
         ),
         encoding="utf-8",
@@ -36,6 +35,37 @@ def test_history_uses_configured_results_directory(tmp_path, monkeypatch):
 
 
 def test_history_loads_etf_mode_badge_fields(tmp_path, monkeypatch):
+    """Primary (flat) shape must surface analysis_mode/instrument_profile."""
+    logs = tmp_path / "logs"
+    log_dir = logs / "510300" / "TradingAgentsStrategy_logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "full_states_log_2026-08-08.json").write_text(
+        json.dumps(
+            {
+                "analysis_mode": "etf",
+                "instrument_profile": {
+                    "tracking_index_name": "沪深300指数",
+                },
+                "final_trade_decision": "HOLD",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(history.DEFAULT_CONFIG, "results_dir", str(logs))
+
+    entries = history.get_history()
+    assert entries[0]["analysis_mode"] == "etf"
+    assert entries[0]["instrument_profile"]["tracking_index_name"] == "沪深300指数"
+
+    from web.components.sidebar import _history_mode_badge, _history_mode_label
+
+    assert _history_mode_badge(entries[0]) == "[ETF]"
+    assert _history_mode_label(entries[0]) == "[ETF] · 沪深300指数"
+    assert _history_mode_badge({"analysis_mode": "stock"}) == "[个股]"
+
+
+def test_history_loads_legacy_nested_shape(tmp_path, monkeypatch):
+    """Compatibility: some historical logs nested the state under the date key."""
     logs = tmp_path / "logs"
     log_dir = logs / "510300" / "TradingAgentsStrategy_logs"
     log_dir.mkdir(parents=True)
@@ -59,11 +89,67 @@ def test_history_loads_etf_mode_badge_fields(tmp_path, monkeypatch):
     assert entries[0]["analysis_mode"] == "etf"
     assert entries[0]["instrument_profile"]["tracking_index_name"] == "沪深300指数"
 
-    from web.components.sidebar import _history_mode_badge, _history_mode_label
 
-    assert _history_mode_badge(entries[0]) == "[ETF]"
-    assert _history_mode_label(entries[0]) == "[ETF] · 沪深300指数"
-    assert _history_mode_badge({"analysis_mode": "stock"}) == "[个股]"
+def test_load_analysis_reads_flat_shape(tmp_path):
+    path = tmp_path / "full_states_log_2026-06-02.json"
+    path.write_text(json.dumps({"final_trade_decision": "HOLD"}), encoding="utf-8")
+
+    assert history.load_analysis(str(path)) == {"final_trade_decision": "HOLD"}
+
+
+def test_load_analysis_reads_legacy_nested_shape(tmp_path):
+    path = tmp_path / "full_states_log_2026-06-02.json"
+    path.write_text(
+        json.dumps({"2026-06-02": {"final_trade_decision": "SELL"}}),
+        encoding="utf-8",
+    )
+
+    assert history.load_analysis(str(path)) == {"final_trade_decision": "SELL"}
+
+
+def test_log_state_write_read_round_trip(tmp_path, monkeypatch):
+    """End-to-end: TradingAgentsGraph._log_state writes what get_history reads.
+
+    This is the real regression guard for the history-shape bug: a helper-only
+    test could pass while the writer and reader still disagreed on shape.
+    """
+    from unittest.mock import MagicMock
+
+    from tradingagents.default_config import DEFAULT_CONFIG
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    mock_client = MagicMock()
+    mock_client.get_llm.return_value = MagicMock()
+    monkeypatch.setattr(
+        "tradingagents.graph.trading_graph.create_llm_client",
+        lambda **kwargs: mock_client,
+    )
+
+    logs = tmp_path / "logs"
+    cfg = {
+        **DEFAULT_CONFIG,
+        "data_cache_dir": str(tmp_path / "cache"),
+        "results_dir": str(logs),
+        "memory_log_path": str(tmp_path / "memory.md"),
+    }
+    ta = TradingAgentsGraph(config=cfg, selected_analysts=["market"])
+    ta.ticker = "510300"
+    ta.analysis_mode = "etf"
+    ta.instrument_profile = {"tracking_index_name": "沪深300指数"}
+
+    ta._log_state(
+        "2026-08-08",
+        {
+            "company_of_interest": "510300",
+            "final_trade_decision": "HOLD",
+        },
+    )
+
+    monkeypatch.setitem(history.DEFAULT_CONFIG, "results_dir", str(logs))
+    entries = history.get_history()
+    assert len(entries) == 1
+    assert entries[0]["analysis_mode"] == "etf"
+    assert entries[0]["instrument_profile"]["tracking_index_name"] == "沪深300指数"
 
 
 def test_incomplete_task_round_trip(tmp_path, monkeypatch):

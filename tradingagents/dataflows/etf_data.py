@@ -45,6 +45,34 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _reject_past_date(end_date: str | None, fn_name: str) -> DataPoint | None:
+    """Refuse a snapshot-only ETF tool call for a historical analysis date.
+
+    These tools (`get_etf_quote`, `get_etf_structure_alerts`,
+    `get_etf_peer_comparison`) read Tencent's realtime quote and would leak
+    today's numbers into a backtest of a past ``trade_date`` otherwise. This
+    guard is always enforced — unlike ``strict_point_in_time`` (config-gated,
+    off by default) — because §6.2 point-in-time discipline is a hard
+    requirement for ETF analysis, not an opt-in.
+    """
+    if not end_date:
+        return None
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    if end_date >= today:
+        return None
+    return DataPoint(
+        None,
+        None,
+        end_date,
+        _now(),
+        "point-in-time guard",
+        "unsupported",
+        f"[{fn_name}] 该接口只提供实时快照，无法回溯到 {end_date}。"
+        "ETF 快照类工具的历史日期拒绝不受 strict_point_in_time 开关影响，"
+        "为避免前视偏差恒定不返回数值。",
+    )
+
+
 def _render(points: dict[str, DataPoint]) -> str:
     return json.dumps(
         {key: point.to_dict() for key, point in points.items()},
@@ -71,9 +99,12 @@ def get_etf_profile(symbol: str) -> str:
         return _render({"profile": DataPoint(None, None, None, retrieved_at, "Eastmoney FundF10", "error", str(exc))})
 
 
-def get_etf_quote(symbol: str) -> str:
+def get_etf_quote(symbol: str, end_date: str | None = None) -> str:
     """Return a Tencent ETF quote snapshot, including turnover when published."""
     retrieved_at = _now()
+    refusal = _reject_past_date(end_date, "get_etf_quote")
+    if refusal is not None:
+        return _render({"quote": refusal})
     try:
         quote = _tencent_quote([symbol]).get(symbol)
         if not quote:
@@ -252,16 +283,23 @@ def _latest_shares_row(symbol: str) -> tuple[dict[str, Any] | None, str | None, 
     return rows[0], point.get("as_of"), status
 
 
-def _peer_row(symbol: str, *, is_subject: bool, expected_index: str) -> dict[str, Any] | None:
-    try:
-        record = resolve_fund_master(symbol)
-    except Exception as exc:
-        return {
-            "symbol": symbol,
-            "is_subject": is_subject,
-            "status": "error",
-            "notes": str(exc),
-        }
+def _peer_row(
+    symbol: str,
+    *,
+    is_subject: bool,
+    expected_index: str,
+    record: Any | None = None,
+) -> dict[str, Any] | None:
+    if record is None:
+        try:
+            record = resolve_fund_master(symbol)
+        except Exception as exc:
+            return {
+                "symbol": symbol,
+                "is_subject": is_subject,
+                "status": "error",
+                "notes": str(exc),
+            }
     if record.classification != "domestic_equity_etf":
         return None
     if not is_subject and not _same_index(record.tracking_index_name, expected_index):
@@ -288,13 +326,18 @@ def _peer_row(symbol: str, *, is_subject: bool, expected_index: str) -> dict[str
     }
 
 
-def get_etf_peer_comparison(symbol: str, max_peers: int = 6) -> str:
+def get_etf_peer_comparison(
+    symbol: str, end_date: str | None = None, max_peers: int = 6
+) -> str:
     """Compare same-index ETFs on fees, disclosed AUM/shares, and liquidity.
 
     Intentionally omits premium/discount, tracking error, and holdings exposure
     because those Stage 1.5/2 capabilities remain closed.
     """
     retrieved_at = _now()
+    refusal = _reject_past_date(end_date, "get_etf_peer_comparison")
+    if refusal is not None:
+        return _render({"peer_comparison": refusal})
     try:
         record = resolve_fund_master(symbol)
         index_name = record.tracking_index_name
@@ -303,7 +346,12 @@ def get_etf_peer_comparison(symbol: str, max_peers: int = 6) -> str:
         codes = discover_peer_etf_codes(symbol, index_name, limit=max(max_peers, 2))
         peers: list[dict[str, Any]] = []
         for code in codes:
-            row = _peer_row(code, is_subject=(code == symbol), expected_index=index_name)
+            row = _peer_row(
+                code,
+                is_subject=(code == symbol),
+                expected_index=index_name,
+                record=record if code == symbol else None,
+            )
             if row is not None:
                 peers.append(row)
             if sum(1 for item in peers if item.get("status") == "ok") >= max_peers:
@@ -366,12 +414,15 @@ def _share_history_rows(symbol: str) -> list[dict[str, Any]]:
     return [row for row in rows if isinstance(row, dict)]
 
 
-def get_etf_structure_alerts(symbol: str) -> str:
+def get_etf_structure_alerts(symbol: str, end_date: str | None = None) -> str:
     """Emit deterministic alerts for share spikes and thin secondary liquidity.
 
     Does not alert on premium/discount or tracking error (Stage 1.5/2 closed).
     """
     retrieved_at = _now()
+    refusal = _reject_past_date(end_date, "get_etf_structure_alerts")
+    if refusal is not None:
+        return _render({"structure_alerts": refusal})
     alerts: list[dict[str, Any]] = []
     try:
         rows = _share_history_rows(symbol)
@@ -498,7 +549,7 @@ def probe_etf_capabilities(symbol: str, trade_date: str) -> dict[str, str]:
     # peer_comparison is intentionally not probed here: discovery fans out to
     # several Eastmoney calls and would double the Stage-3 analyst cost.
     probes = {
-        "liquidity_metrics": lambda: get_etf_quote(symbol),
+        "liquidity_metrics": lambda: get_etf_quote(symbol, trade_date),
         "shares_and_aum": lambda: get_etf_shares_aum(symbol),
         "index_news_policy": lambda: get_etf_announcements(symbol, trade_date),
     }

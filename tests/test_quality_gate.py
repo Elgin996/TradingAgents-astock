@@ -5,9 +5,12 @@ from unittest.mock import MagicMock
 from langgraph.graph import END
 
 from tradingagents.agents.quality_gate import (
+    ETF_REPORT_FIELDS,
     REPORT_FIELDS,
     _fail_threshold,
+    _hard_check_report,
     create_quality_gate,
+    find_forbidden_term_hits,
 )
 from tradingagents.graph.conditional_logic import ConditionalLogic
 

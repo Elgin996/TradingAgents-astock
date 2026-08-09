@@ -14,25 +14,33 @@ the user confirms any missing provider-qualified tracking-index code.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from functools import lru_cache
 from io import StringIO
+import logging
 import re
 from typing import Literal
 
 import pandas as pd
-import requests
 
-from .a_stock import _get_mootdx_client
+from .a_stock import _em_get, _get_mootdx_client
 from .index_catalog import lookup_tracking_index_code
 from .utils import safe_ticker_component
 
+logger = logging.getLogger(__name__)
 
 FundClassification = Literal[
     "domestic_equity_etf",
-    "unsupported_etf",
-    "not_etf",
+    "unsupported_fund",
+    "not_a_fund",
 ]
 TrackingIndexCodeSource = Literal["missing", "user_supplied", "catalog"]
+
+_PLACEHOLDER_VALUES = frozenset({"---", "--", "-", ""})
+_PROFILE_HEADERS = {
+    "User-Agent": "Mozilla/5.0",
+    "Referer": "https://fund.eastmoney.com/",
+}
 
 
 @dataclass(frozen=True)
@@ -40,7 +48,7 @@ class FundMasterRecord:
     """Classified fund metadata from the validated phase-0 sources."""
 
     symbol: str
-    exchange: Literal["SSE", "SZSE"]
+    exchange: Literal["SSE", "SZSE"] | None
     fund_name: str
     fund_type: str
     tracking_index_name: str | None
@@ -62,9 +70,16 @@ def _text(value: object) -> str | None:
     return text or None
 
 
-@lru_cache(maxsize=1)
-def _exchange_memberships() -> dict[str, Literal["SSE", "SZSE"]]:
-    """Return exchange membership from the mootdx securities master."""
+@lru_cache(maxsize=8)
+def _exchange_memberships(as_of: str) -> dict[str, Literal["SSE", "SZSE"]]:
+    """Return exchange membership from the mootdx securities master.
+
+    ``as_of`` is the calendar day string so the membership snapshot refreshes
+    daily without staying stale across sessions. Cross-listed codes keep the
+    first market written (SZSE before SSE) so Shenzhen equities such as
+    ``000016`` are not overwritten by Shanghai index membership.
+    """
+    del as_of  # cache key only
     client = _get_mootdx_client()
     memberships: dict[str, Literal["SSE", "SZSE"]] = {}
     for market, exchange in ((0, "SZSE"), (1, "SSE")):
@@ -73,13 +88,23 @@ def _exchange_memberships() -> dict[str, Literal["SSE", "SZSE"]]:
             raise RuntimeError(f"mootdx returned no {exchange} securities master")
         for code in securities["code"]:
             normalized = str(code).strip()
-            if normalized:
+            if not normalized:
+                continue
+            existing = memberships.get(normalized)
+            if existing is None:
                 memberships[normalized] = exchange
+            elif existing != exchange:
+                logger.debug(
+                    "exchange membership conflict for %s: keeping %s, ignoring %s",
+                    normalized,
+                    existing,
+                    exchange,
+                )
     return memberships
 
 
 def _lookup_exchange(symbol: str) -> Literal["SSE", "SZSE"]:
-    exchange = _exchange_memberships().get(symbol)
+    exchange = _exchange_memberships(date.today().isoformat()).get(symbol)
     if exchange is None:
         raise ValueError(f"{symbol} is absent from the SSE/SZSE securities master")
     return exchange
@@ -87,12 +112,9 @@ def _lookup_exchange(symbol: str) -> Literal["SSE", "SZSE"]:
 
 def _fetch_profile_fields(symbol: str) -> dict[str, str]:
     """Fetch the tabular Eastmoney public fund profile for one code."""
-    response = requests.get(
+    response = _em_get(
         f"https://fundf10.eastmoney.com/jbgk_{symbol}.html",
-        headers={
-            "User-Agent": "Mozilla/5.0",
-            "Referer": "https://fund.eastmoney.com/",
-        },
+        headers=_PROFILE_HEADERS,
         timeout=15,
     )
     response.raise_for_status()
@@ -112,27 +134,54 @@ def _fetch_profile_fields(symbol: str) -> dict[str, str]:
     raise ValueError(f"{symbol} has no parseable Eastmoney fund profile")
 
 
-def _classify(fields: dict[str, str]) -> tuple[FundClassification, str]:
-    full_name = fields["基金全称"]
-    fund_type = fields["基金类型"]
-    tracking_index = fields.get("跟踪标的")
-    is_etf = "交易型开放式" in full_name
+def _is_placeholder(value: str | None) -> bool:
+    return value is None or value.strip() in _PLACEHOLDER_VALUES
 
-    if not is_etf:
-        return "not_etf", "基金全称不包含“交易型开放式”"
+
+def _classify(fields: dict[str, str]) -> tuple[FundClassification, str]:
+    full_name = fields.get("基金全称")
+    fund_type = fields.get("基金类型")
+    tracking_index = fields.get("跟踪标的")
+
+    if _is_placeholder(full_name) or _is_placeholder(fund_type):
+        return "not_a_fund", "东财档案为占位符，判定为非基金证券"
+    assert full_name is not None and fund_type is not None
+    if "联接" in full_name:
+        return "unsupported_fund", "联接基金不在当前支持范围"
+    if "交易型开放式" not in full_name:
+        return (
+            "unsupported_fund",
+            "基金全称不包含“交易型开放式”（货币 ETF / LOF / 场外基金等）",
+        )
     if fund_type != "指数型-股票":
-        return "unsupported_etf", f"基金类型为“{fund_type}”，不属于境内股票指数 ETF"
+        return (
+            "unsupported_fund",
+            f"基金类型为“{fund_type}”，不属于境内股票指数 ETF",
+        )
     if not tracking_index or tracking_index == "该基金无跟踪标的":
-        return "unsupported_etf", "缺少可确认的跟踪标的"
+        return "unsupported_fund", "缺少可确认的跟踪标的"
     return "domestic_equity_etf", "交易型开放式、指数型-股票且具有跟踪标的"
 
 
-def resolve_fund_master(symbol: str) -> FundMasterRecord:
-    """Resolve and classify one fund without inferring its exchange or type."""
+@lru_cache(maxsize=512)
+def _resolve_fund_master_cached(symbol: str, as_of: str) -> FundMasterRecord:
+    """Cached resolver keyed by symbol and calendar day."""
+    del as_of  # cache key only
     code = safe_ticker_component(symbol)
-    exchange = _lookup_exchange(code)
-    fields = _fetch_profile_fields(code)
+    try:
+        fields = _fetch_profile_fields(code)
+    except Exception:
+        logger.error("Eastmoney fund profile fetch/parse failed for %s", code, exc_info=True)
+        raise
+
     classification, reason = _classify(fields)
+    exchange: Literal["SSE", "SZSE"] | None
+    try:
+        exchange = _lookup_exchange(code)
+    except ValueError:
+        if classification == "domestic_equity_etf":
+            raise
+        exchange = None
 
     tracking_index_name = fields.get("跟踪标的")
     tracking_index_code = None
@@ -160,6 +209,17 @@ def resolve_fund_master(symbol: str) -> FundMasterRecord:
         tracking_index_provider=tracking_index_provider,
         tracking_index_code_source=tracking_index_code_source,
     )
+
+
+def resolve_fund_master(symbol: str) -> FundMasterRecord:
+    """Resolve and classify one fund without inferring its exchange or type."""
+    return _resolve_fund_master_cached(safe_ticker_component(symbol), date.today().isoformat())
+
+
+def clear_fund_master_caches() -> None:
+    """Test helper: drop day-scoped membership and fund-master caches."""
+    _exchange_memberships.cache_clear()
+    _resolve_fund_master_cached.cache_clear()
 
 
 def with_user_supplied_tracking_index_code(

@@ -14,14 +14,6 @@ def create_neutral_debator(llm):
         current_aggressive_response = risk_debate_state.get("current_aggressive_response", "")
         current_conservative_response = risk_debate_state.get("current_conservative_response", "")
 
-        market_research_report = state["market_report"]
-        sentiment_report = state["sentiment_report"]
-        news_report = state["news_report"]
-        fundamentals_report = state["fundamentals_report"]
-        policy_report = state.get("policy_report", "")
-        hot_money_report = state.get("hot_money_report", "")
-        lockup_report = state.get("lockup_report", "")
-
         trader_decision = state["trader_investment_plan"]
         instrument_context = build_instrument_context(state["company_of_interest"], state.get("instrument_profile"))
         evidence_lexicon = build_evidence_lexicon(state.get("analysis_mode", "stock"), state.get("analysis_capabilities"))

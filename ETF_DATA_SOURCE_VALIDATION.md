@@ -13,7 +13,8 @@
 | 实时 ETF 行情（价格、换手率） | 腾讯 `https://qt.gtimg.cn/q=sh510300,...` | 东财 push2 `api/qt/stock/get?secid={market}.{code}` | 仅快照 | 4/4 | 腾讯成功；东财必须沿用全局节流 | 需在产品使用前确认 | 不可用时不启用实时流动性指标 |
 | ETF 名称、管理人、费率、份额、规模、跟踪标的 | 天天基金基金档案 `https://fundf10.eastmoney.com/jbgk_{code}.html` | 东财 `FundBaseTypeInformation.ashx`（名称、基金类型、管理人、当前净值日期、规模） | 档案为最新披露快照；尚未验证完整历史 | 4/4 支持样本 | 公开 HTML，已解析 4 列资料表；需要限流、缓存和页面结构监控 | Choice 数据，需确认产品使用许可 | 低频描述字段可标记缺失；不得伪造历史份额 |
 | 证券类型、ETF 资产类别、交易所 | mootdx `stocks(market=0/1)`（交易所成员资格）+ 天天基金档案（基金类型、全称、跟踪标的） | 无已验证独立源 | 当前清单快照 | 4/4 支持、5/5 拒绝样本 | mootdx 整表拉取约 16 秒，不能在输入时逐只调用；需要按交易日缓存 | mootdx/Choice 的产品使用许可待确认 | 主数据任一侧不可用时阻止开始分析，不根据代码前缀判定 |
-| ETF 日 K 和成交量 | 新浪 `CN_MarketData.getKLineData?symbol={prefix}{code}` | 无已验证独立备用源 | 约 800 根日线 | 4/4 | 4/4 返回日线；无成交额字段 | 需确认 | 可以支持技术指标；不启用依赖成交额的流动性指标 |
+| ETF 日 K 和成交量 | 新浪 `CN_MarketData.getKLineData?symbol={prefix}{code}` | 东财 push2his（见下行） | 约 800 根日线 | 4/4 | 4/4 返回日线；**无成交额字段** | 需确认 | 可支持技术指标；无 Amount 时不得启用依赖成交额的流动性指标 |
+| ETF 日 K + 成交额 | 东财 push2his `api/qt/stock/kline/get?secid={market}.{code}&fields1=f1,f2,f3,f4,f5,f6&fields2=f51,f52,f53,f54,f55,f56,f57&klt=101&fqt=1` | 新浪（无 Amount） | 可翻页历史 | 4/4（`510300`/`159915`/`512480`/`588000`） | 字段映射：`f51`日期 `f52`开 `f53`收 `f54`高 `f55`低 `f56`成交量 `f57`成交额；必须走全局 `_em_get` 节流（`EM_MIN_INTERVAL`） | 需确认产品使用许可 | **主源**：实现走 `_em_kline_with_amount`；有 Amount 时启用 `liquidity_metrics`；push2his 失败时降级新浪并关闭依赖成交额的流动性结论 |
 | ETF 日 K（mootdx） | mootdx `client.bars(symbol=..., frequency=9)` | 新浪 | 未验证 | 0/4 | 4 个样本均返回空 DataFrame | 不适用 | 不能作为 ETF 日 K 主源；现有 mootdx-first 实现必须在 ETF 模式中绕开 |
 | 基金份额、净资产规模 | 天天基金 `FundArchivesDatas.aspx?type=gmbd&mode=0&code={code}` | 基金档案基本概况页的最新披露值 | 季度序列 | 4/4 | 4/4 返回申购、赎回、期末总份额及期末净资产；返回 JavaScript 包装的 HTML 表格 | Choice 数据，需确认产品使用许可 | 可启用时必须使用披露期，不得称为实时份额或实时资金流 |
 | 历史基金份额净值 | 天天基金 `api.fund.eastmoney.com/f10/lsjz?fundCode={code}&...` | 无已验证独立源 | 可翻页历史 | 4/4 | 4/4 返回 `FSRQ`、`DWJZ`、`ACCUM` 和日增长率；JSONP，需要解析回调包装 | 需确认 | 仅用于已公布净值；不得改名为 IOPV 或盘中折溢价 |

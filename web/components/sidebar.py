@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Any
 
 import streamlit as st
@@ -123,11 +123,10 @@ def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, 
     try:
         record = resolve_fund_master(code)
     except ValueError as exc:
-        # Eastmoney returns an ordinary HTML page without fund fields for a
-        # normal listed equity. That is a confirmed non-ETF path, unlike a
-        # transport or securities-master failure.
-        if "no parseable Eastmoney fund profile" in str(exc):
-            return "stock", None, None
+        # Any parse/lookup failure (Eastmoney profile page changed, code
+        # absent from the securities master, etc.) is ambiguous and must not
+        # be inferred as "stock" from a code prefix. Surface as unknown so
+        # the user can retry rather than silently mis-routing the analysis.
         return "unknown", None, f"证券主数据无法确认类型：{exc}"
     except Exception as exc:
         return "unknown", None, f"证券主数据暂不可用，请重试：{exc}"
@@ -166,13 +165,15 @@ def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, 
                 "management_fee": record.management_fee,
                 "custodian_fee": record.custodian_fee,
                 "price_limit_pct": price_limit,
-                "profile_as_of": date.today().isoformat(),
+                "profile_as_of": datetime.now(timezone.utc).date().isoformat(),
                 "source": "mootdx securities master + Eastmoney fund profile",
             },
             None,
         )
-    if record.classification == "unsupported_etf":
+    if record.classification == "unsupported_fund":
         return "unsupported", None, f"当前版本不支持该类型：{record.classification_reason}"
+    # "not_a_fund": the Eastmoney fund-profile page returned placeholder
+    # fields, confirming this is an ordinary listed equity, not a fund.
     return "stock", None, None
 
 
@@ -519,13 +520,14 @@ def render_sidebar() -> None:
     instrument_error: str | None = None
     if resolved_code:
         cache = st.session_state.setdefault("resolved_instrument_profiles", {})
-        cached = cache.get(resolved_code)
+        cache_key = (resolved_code, trade_date.strftime("%Y-%m-%d"))
+        cached = cache.get(cache_key)
         if cached is None:
             cached = _resolve_instrument_profile(resolved_code)
             # Cache confirmed profiles only. A transient master-data timeout
             # must remain retryable on the next Streamlit rerun.
             if cached[2] is None:
-                cache[resolved_code] = cached
+                cache[cache_key] = cached
         analysis_mode, instrument_profile, instrument_error = cached
 
     if input_error:

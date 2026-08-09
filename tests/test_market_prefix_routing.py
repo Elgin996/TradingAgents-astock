@@ -16,7 +16,12 @@ from tradingagents.dataflows.a_stock import (
     _em_secid,
     _fmt_yi,
     _get_prefix,
+    _index_symbol,
     _sina_symbol,
+)
+from tradingagents.dataflows.index_catalog import (
+    INDEX_EXCHANGE_BY_CODE,
+    _INDEX_CATALOG,
 )
 
 
@@ -34,6 +39,7 @@ class MarketPrefixRoutingTests(unittest.TestCase):
 
     def test_shenzhen_main_board_and_chinext(self):
         self.assertEqual(_get_prefix("000001"), "sz")
+        self.assertEqual(_get_prefix("000016"), "sz")
         self.assertEqual(_get_prefix("002463"), "sz")
         self.assertEqual(_get_prefix("300476"), "sz")
 
@@ -61,6 +67,7 @@ class MarketPrefixRoutingTests(unittest.TestCase):
     ("600519", "1.600519", "sh600519"),
     ("510300", "1.510300", "sh510300"),
     ("000001", "0.000001", "sz000001"),
+    ("000016", "0.000016", "sz000016"),
     ("300750", "0.300750", "sz300750"),
     ("159915", "0.159915", "sz159915"),
     ("920819", "0.920819", "bj920819"),
@@ -69,6 +76,21 @@ class MarketPrefixRoutingTests(unittest.TestCase):
 def test_market_routing(code, secid, sina):
     assert _em_secid(code) == secid
     assert _sina_symbol(code) == sina
+
+
+@pytest.mark.unit
+def test_index_symbol_uses_catalog_exchange():
+    assert _index_symbol("000906") == "sh000906"
+    assert _index_symbol("000510") == "sh000510"
+    assert _index_symbol("399006") == "sz399006"
+    assert _index_symbol("000300") == "sh000300"
+
+
+@pytest.mark.unit
+def test_index_exchange_covers_catalog_codes():
+    catalog_codes = {code for code, _ in _INDEX_CATALOG.values()}
+    assert set(INDEX_EXCHANGE_BY_CODE) == catalog_codes
+
 
 
 @pytest.mark.unit

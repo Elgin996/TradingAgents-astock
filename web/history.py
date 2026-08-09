@@ -25,6 +25,24 @@ def _results_dir() -> Path:
     return Path(DEFAULT_CONFIG["results_dir"])
 
 
+def _load_state(path: str | Path, date: str) -> dict[str, Any]:
+    """Load a saved analysis JSON file, tolerating both on-disk shapes.
+
+    The production writer (``TradingAgentsGraph._log_state``) dumps the state
+    dict directly (flat). Some historical logs nested it one level under the
+    trade-date string. Try the flat shape first; fall back to the nested
+    lookup only when the top-level payload does not look like a state dict.
+    """
+    with open(path, encoding="utf-8") as f:
+        payload = json.load(f)
+    if not isinstance(payload, dict):
+        return {}
+    inner = payload.get(date)
+    if isinstance(inner, dict):
+        return inner
+    return payload
+
+
 def get_history() -> list[dict[str, str]]:
     """Scan saved analysis logs and return a sorted list (newest first).
 
@@ -44,13 +62,10 @@ def get_history() -> list[dict[str, str]]:
         ticker = log_file.parent.parent.name
         entry: dict[str, Any] = {"ticker": ticker, "date": date, "path": str(log_file)}
         try:
-            with open(log_file, encoding="utf-8") as f:
-                payload = json.load(f)
-            state = payload.get(date) if isinstance(payload, dict) else None
-            if isinstance(state, dict):
-                entry["analysis_mode"] = state.get("analysis_mode", "stock")
-                if state.get("instrument_profile"):
-                    entry["instrument_profile"] = state.get("instrument_profile")
+            state = _load_state(log_file, date)
+            entry["analysis_mode"] = state.get("analysis_mode", "stock")
+            if state.get("instrument_profile"):
+                entry["instrument_profile"] = state.get("instrument_profile")
         except (OSError, json.JSONDecodeError, TypeError):
             entry["analysis_mode"] = "stock"
         entries.append(entry)
@@ -223,9 +238,10 @@ def get_incomplete_history() -> list[dict[str, Any]]:
 
 
 def load_analysis(path: str) -> dict[str, Any]:
-    """Load a saved analysis JSON file."""
-    with open(path, encoding="utf-8") as f:
-        return json.load(f)
+    """Load a saved analysis JSON file, tolerating flat or nested shapes."""
+    match = re.search(r"full_states_log_(\d{4}-\d{2}-\d{2})\.json$", Path(path).name)
+    date = match.group(1) if match else ""
+    return _load_state(path, date)
 
 
 def extract_signal(state: dict[str, Any]) -> str:

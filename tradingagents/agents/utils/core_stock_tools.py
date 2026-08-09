@@ -22,3 +22,14 @@ def get_stock_data(
     """
     assert_tool_allowed("get_stock_data")
     return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+
+
+@tool
+def get_index_data(
+    symbol: Annotated[str, "Index code (e.g. 000300, 399006)"],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
+    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+) -> str:
+    """Retrieve index OHLCV using index-aware exchange routing (not stock prefix rules)."""
+    assert_tool_allowed("get_index_data")
+    return route_to_vendor("get_index_data", symbol, start_date, end_date)

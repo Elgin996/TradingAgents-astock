@@ -14,6 +14,7 @@ Data sources:
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from typing import Annotated
 from datetime import datetime
 from dateutil.relativedelta import relativedelta
@@ -37,23 +38,26 @@ from .utils import safe_ticker_component
 from tradingagents.utils.file_lock import FileLock
 
 logger = logging.getLogger(__name__)
-_SH_INDEX_CODES = frozenset({"000016", "000300", "000905", "000852", "000688"})
 
-# Index-level news reuse across ETFs that share the same tracking index.
-_INDEX_NEWS_CACHE: dict[tuple[str, str, str], str] = {}
+# Bounded index-news cache: only catalogued index codes, keyed by trade day.
+_INDEX_NEWS_CACHE: OrderedDict[tuple[str, str, str, str], str] = OrderedDict()
+_INDEX_NEWS_CACHE_MAX = 64
 
 
-def _is_index_code(code: str) -> bool:
-    return code in _SH_INDEX_CODES or code.startswith(("000", "399"))
-
+def _cache_index_news(key: tuple[str, str, str, str], value: str) -> None:
+    _INDEX_NEWS_CACHE[key] = value
+    _INDEX_NEWS_CACHE.move_to_end(key)
+    while len(_INDEX_NEWS_CACHE) > _INDEX_NEWS_CACHE_MAX:
+        _INDEX_NEWS_CACHE.popitem(last=False)
 
 # ---------------------------------------------------------------------------
 # Helpers: ticker format & market detection
 # ---------------------------------------------------------------------------
 
 def _get_prefix(code: str) -> str:
-    """6-digit mainland security code -> market prefix for quote APIs.
+    """6-digit mainland *security* code -> market prefix for quote APIs.
 
+    Index codes must use ``_index_symbol`` / ``INDEX_EXCHANGE_BY_CODE`` instead.
     The 92 prefix must be checked before the leading-9 rule: the Beijing Stock
     Exchange started issuing 920xxx codes for new listings in October 2024, and
     a bare ``startswith("9")`` routes them to Shanghai, where the Tencent quote
@@ -66,11 +70,25 @@ def _get_prefix(code: str) -> str:
         return "bj"
     if code.startswith("8"):
         return "bj"
-    if code in _SH_INDEX_CODES:
-        return "sh"
     if code.startswith(("5", "6", "9")):
         return "sh"
     return "sz"
+
+
+def _index_symbol(code: str) -> str:
+    """Preferred Sina/Tencent symbol for a catalogued index code."""
+    from .index_catalog import INDEX_EXCHANGE_BY_CODE
+
+    prefix = INDEX_EXCHANGE_BY_CODE.get(code)
+    if prefix is None:
+        prefix = "sz" if code.startswith("399") else "sh"
+    return f"{prefix}{code}"
+
+
+def _is_catalog_index_code(code: str) -> bool:
+    from .index_catalog import INDEX_EXCHANGE_BY_CODE
+
+    return code in INDEX_EXCHANGE_BY_CODE
 
 
 # Eastmoney market ids. SH=1, SZ=0. BSE is served under the Shenzhen id on
@@ -134,8 +152,12 @@ def _build_name_code_map() -> tuple[dict[str, str], dict[str, str]]:
     c2n: dict[str, str] = {}
 
     try:
-        for market in (0, 1, 2):  # 0=SZ, 1=SH, 2=BJ
-            stocks = client.stocks(market=market)
+        for market in (0, 1, 2):  # 0=SZ, 1=SH, 2=BJ (skipped when unsupported)
+            try:
+                stocks = client.stocks(market=market)
+            except Exception as market_exc:
+                logger.debug("mootdx stocks(market=%s) skipped: %s", market, market_exc)
+                continue
             if stocks is None or stocks.empty:
                 continue
             for _, row in stocks.iterrows():
@@ -659,8 +681,7 @@ def _load_ohlcv_astock(symbol: str, curr_date: str) -> pd.DataFrame:
                 raise ValueError(f"No OHLCV data from Sina for ETF {code}")
         except Exception as exc:
             raise ValueError(f"No OHLCV data from Sina for ETF {code}") from exc
-    # Fetch from mootdx — 800 daily bars (~3 years of trading days)
-    elif not is_etf_run:
+    else:
         try:
             client = _get_mootdx_client()
             df = client.bars(symbol=code, category=4, offset=800)
@@ -889,6 +910,70 @@ def get_stock_data(
     )
 
     return header + csv_out
+
+
+def get_index_data(
+    symbol: Annotated[str, "Index code (e.g. 000300, 399006)"],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
+    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+) -> str:
+    """Fetch index OHLCV via index-aware Sina routing (never stock ``_get_prefix``)."""
+    code = _normalize_ticker(symbol)
+    preferred = _index_symbol(code)[:2]
+    alternate = "sz" if preferred == "sh" else "sh"
+    url = (
+        "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
+        "CN_MarketData.getKLineData"
+    )
+    df = pd.DataFrame()
+    used_prefix = preferred
+    for prefix in (preferred, alternate):
+        try:
+            params = {
+                "symbol": f"{prefix}{code}",
+                "scale": "240",
+                "ma": "no",
+                "datalen": "800",
+            }
+            r = _requests.get(url, params=params, timeout=15)
+            r.raise_for_status()
+            data = _json.loads(r.text)
+            if not data:
+                continue
+            rows = [
+                {
+                    "Date": item["day"],
+                    "Open": float(item["open"]),
+                    "High": float(item["high"]),
+                    "Low": float(item["low"]),
+                    "Close": float(item["close"]),
+                    "Volume": int(item["volume"]),
+                }
+                for item in data
+            ]
+            df = _normalize_ohlcv_dates(pd.DataFrame(rows))
+            used_prefix = prefix
+            break
+        except Exception as exc:
+            logger.debug("get_index_data %s%s failed: %s", prefix, code, exc)
+    if df.empty:
+        return f"K线数据获取失败：指数 {code} 在 sh/sz 前缀下均无数据"
+    start_dt = pd.to_datetime(start_date)
+    end_dt = pd.to_datetime(end_date)
+    df = df[(df["Date"] >= start_dt) & (df["Date"] <= end_dt)]
+    if df.empty:
+        return f"No index data for '{code}' between {start_date} and {end_date}"
+    for col in ["Open", "High", "Low", "Close"]:
+        df[col] = df[col].round(2)
+    df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
+    header = (
+        f"# Index data for {code} from {start_date} to {end_date}\n"
+        f"# Total records: {len(df)}\n"
+        f"# Data source: sina HTTP ({used_prefix}{code})\n\n"
+    )
+    return header + df[["Date", "Open", "High", "Low", "Close", "Volume"]].to_csv(
+        index=False
+    )
 
 
 # ---- 2. get_indicators ----
@@ -1464,8 +1549,9 @@ def get_news(
 ) -> str:
     """Get stock-specific news via East Money direct API (Sina as fallback)."""
     code = _normalize_ticker(ticker)
-    cache_key = (code, start_date, end_date)
-    if _is_index_code(code) and cache_key in _INDEX_NEWS_CACHE:
+    as_of = datetime.now().strftime("%Y-%m-%d")
+    cache_key = (code, start_date, end_date, as_of)
+    if _is_catalog_index_code(code) and cache_key in _INDEX_NEWS_CACHE:
         return _INDEX_NEWS_CACHE[cache_key]
 
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
@@ -1489,8 +1575,8 @@ def get_news(
 
     if not articles:
         result = f"No news found for A-stock '{code}'"
-        if _is_index_code(code):
-            _INDEX_NEWS_CACHE[cache_key] = result
+        if _is_catalog_index_code(code):
+            _cache_index_news(cache_key, result)
         return result
 
     news_str = ""
@@ -1528,8 +1614,8 @@ def get_news(
             f"## {code} (A-stock) News, from {start_date} to {end_date}:\n\n"
             + news_str
         )
-    if _is_index_code(code):
-        _INDEX_NEWS_CACHE[cache_key] = result
+    if _is_catalog_index_code(code):
+        _cache_index_news(cache_key, result)
     return result
 
 

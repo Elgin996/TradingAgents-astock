@@ -32,6 +32,12 @@ ETF_REPORT_FIELDS = {
 }
 ETF_FORBIDDEN_TERMS = ("公司营收", "净利润", "董监高", "解禁", "限售", "龙虎榜")
 
+# When a forbidden term appears within this many characters of one of these
+# negation/exclusion markers, it is a compliant disclosure ("not applicable to
+# this ETF") rather than a genuine stock-logic leak, and must not be flagged.
+_NEGATION_MARKERS = ("不适用", "不涉及", "未使用", "无相关", "已排除", "N/A")
+_NEGATION_WINDOW = 12
+
 MIN_REPORT_LENGTH = 200
 
 FAILURE_MARKERS = [
@@ -43,25 +49,57 @@ FAILURE_MARKERS = [
 ]
 
 
+def find_forbidden_term_hits(report: str) -> list[str]:
+    """Return ETF-forbidden terms genuinely used (not declared inapplicable).
+
+    A term only counts as a hit if at least one of its occurrences lacks a
+    nearby negation/exclusion marker (e.g. "不适用：龙虎榜（个股专属）" is not
+    a hit; "该 ETF 的解禁压力将在下月释放" is).
+    """
+    hits: list[str] = []
+    for term in ETF_FORBIDDEN_TERMS:
+        search_from = 0
+        violated = False
+        while True:
+            pos = report.find(term, search_from)
+            if pos == -1:
+                break
+            window = report[max(0, pos - _NEGATION_WINDOW): pos + len(term) + _NEGATION_WINDOW]
+            if not any(marker in window for marker in _NEGATION_MARKERS):
+                violated = True
+                break
+            search_from = pos + len(term)
+        if violated:
+            hits.append(term)
+    return hits
+
+
 def _hard_check_report(
     analyst_type: str, report: str, analysis_mode: str = "stock"
 ) -> tuple:
-    """Run hard checks on a single report. Returns (grade, detail)."""
+    """Run hard checks on a single report. Returns (grade, detail, forbidden_hits)."""
     if not report or not report.strip():
-        return ("F", "报告为空")
+        return ("F", "报告为空", [])
 
     length = len(report.strip())
-    if analysis_mode == "etf" and any(term in report for term in ETF_FORBIDDEN_TERMS):
-        return ("F", "ETF 报告包含禁止的个股逻辑")
+    if analysis_mode == "etf":
+        forbidden_hits = find_forbidden_term_hits(report)
+        if forbidden_hits:
+            name = ANALYST_NAMES.get(analyst_type, analyst_type)
+            return (
+                "F",
+                f"{name}报告包含禁止的个股逻辑：{'、'.join(forbidden_hits)}",
+                forbidden_hits,
+            )
     if length < MIN_REPORT_LENGTH:
-        return ("D", f"报告过短 ({length} chars < {MIN_REPORT_LENGTH})")
+        return ("D", f"报告过短 ({length} chars < {MIN_REPORT_LENGTH})", [])
 
     failure_count = sum(1 for m in FAILURE_MARKERS if m in report)
     stripped = report
     for m in FAILURE_MARKERS:
         stripped = stripped.replace(m, "")
     if failure_count > 0 and len(stripped.strip()) < MIN_REPORT_LENGTH:
-        return ("D", f"报告主要由失败信息构成 ({failure_count} 处)")
+        return ("D", f"报告主要由失败信息构成 ({failure_count} 处)", [])
 
     has_table = "|" in report and "---" in report
     missing_count = report.count("[数据缺失")
@@ -73,11 +111,11 @@ def _hard_check_report(
         issues.append(f"{missing_count} 处数据缺失")
 
     if missing_count >= 3:
-        return ("C", "；".join(issues))
+        return ("C", "；".join(issues), [])
     if not has_table or missing_count > 0:
-        return ("B", "；".join(issues) if issues else "基本合格")
+        return ("B", "；".join(issues) if issues else "基本合格", [])
 
-    return ("A", f"完整 ({length} chars)")
+    return ("A", f"完整 ({length} chars)", [])
 
 
 def _fail_threshold(n_fields: int) -> int:
@@ -181,11 +219,14 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
             reports[field] = state.get(field, "")
 
         hard_results = {}
+        forbidden_hits_by_analyst: dict[str, list[str]] = {}
         for analyst_type, field in fields.items():
-            grade, detail = _hard_check_report(
+            grade, detail, forbidden_hits = _hard_check_report(
                 analyst_type, reports[field], analysis_mode
             )
             hard_results[analyst_type] = (grade, detail)
+            if forbidden_hits:
+                forbidden_hits_by_analyst[analyst_type] = forbidden_hits
 
         hard_summary_lines = []
         for analyst_type, (grade, detail) in hard_results.items():
@@ -196,10 +237,16 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
         fail_count = sum(
             1 for _, (g, _) in hard_results.items() if g in ("F", "D")
         )
-        data_quality_failed = bool(fields) and fail_count >= threshold
+        forbidden_term_hit = bool(forbidden_hits_by_analyst)
+        # A genuine forbidden-term leak (individual-stock logic in an ETF
+        # report) is a standalone blocking signal — it must not need to wait
+        # for enough *other* reports to also fail before the run is blocked.
+        data_quality_failed = bool(fields) and (
+            fail_count >= threshold or forbidden_term_hit
+        )
 
         llm_review = ""
-        if fields and fail_count < threshold:
+        if fields and not data_quality_failed:
             try:
                 review_prompt = _build_review_prompt(
                     reports, trade_date, ticker, fields
@@ -210,6 +257,9 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
                 llm_review = f"（LLM 复审失败: {type(e).__name__}: {e}）"
 
         verdict = "未通过 ❌" if data_quality_failed else "通过 ✅"
+        verdict_reason = f"{fail_count} 项硬检查未达标，阈值为 {threshold} 项。"
+        if forbidden_term_hit:
+            verdict_reason += " 检测到禁用词命中，独立阻断（不受阈值影响）。"
         summary = (
             f"## 数据质量门控结果\n\n"
             f"**标的**: {ticker} | **交易日**: {trade_date}\n\n"
@@ -217,8 +267,13 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
             f"### LLM 复审\n"
             f"{llm_review if llm_review else '（跳过 — 多数报告未通过硬检查）'}\n\n"
             f"### 门控判定\n"
-            f"**{verdict}** — {fail_count} 项硬检查未达标，阈值为 {threshold} 项。\n"
+            f"**{verdict}** — {verdict_reason}\n"
         )
+        if forbidden_hits_by_analyst:
+            summary += "\n### 禁用词命中\n" + "\n".join(
+                f"- {ANALYST_NAMES.get(analyst_type, analyst_type)}: {'、'.join(hits)}"
+                for analyst_type, hits in forbidden_hits_by_analyst.items()
+            ) + "\n"
         if unavailable:
             summary += "\n### 不可得数据\n" + "\n".join(
                 f"- {capability}: {reason}"

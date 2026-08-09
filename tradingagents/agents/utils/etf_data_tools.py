@@ -14,10 +14,18 @@ def get_etf_profile(symbol: Annotated[str, "6-digit ETF code"]) -> str:
 
 
 @tool
-def get_etf_quote(symbol: Annotated[str, "6-digit ETF code"]) -> str:
-    """Fetch an ETF quote snapshot with published turnover."""
+def get_etf_quote(
+    symbol: Annotated[str, "6-digit ETF code"],
+    end_date: Annotated[str, "YYYY-MM-DD analysis date"],
+) -> str:
+    """Fetch an ETF quote snapshot with published turnover.
+
+    Realtime-only: returns status="unsupported" with no numeric values when
+    end_date is before today, to avoid leaking today's snapshot into a
+    historical analysis.
+    """
     assert_tool_allowed("get_etf_quote")
-    return route_to_vendor("get_etf_quote", symbol)
+    return route_to_vendor("get_etf_quote", symbol, end_date)
 
 
 @tool
@@ -40,19 +48,27 @@ def get_etf_announcements(
 @tool
 def get_etf_peer_comparison(
     symbol: Annotated[str, "6-digit ETF code"],
+    end_date: Annotated[str, "YYYY-MM-DD analysis date"],
 ) -> str:
     """Compare same-index listed ETFs on fees, disclosed shares/AUM, and liquidity.
 
     Does not include premium/discount, tracking error, or holdings exposure.
+    Realtime-only: returns status="unsupported" with no numeric values when
+    end_date is before today.
     """
     assert_tool_allowed("get_etf_peer_comparison")
-    return route_to_vendor("get_etf_peer_comparison", symbol)
+    return route_to_vendor("get_etf_peer_comparison", symbol, end_date)
 
 
 @tool
 def get_etf_structure_alerts(
     symbol: Annotated[str, "6-digit ETF code"],
+    end_date: Annotated[str, "YYYY-MM-DD analysis date"],
 ) -> str:
-    """Return rule alerts for disclosed share/AUM spikes and thin turnover."""
+    """Return rule alerts for disclosed share/AUM spikes and thin turnover.
+
+    Realtime-only: returns status="unsupported" with no numeric values when
+    end_date is before today.
+    """
     assert_tool_allowed("get_etf_structure_alerts")
-    return route_to_vendor("get_etf_structure_alerts", symbol)
+    return route_to_vendor("get_etf_structure_alerts", symbol, end_date)
