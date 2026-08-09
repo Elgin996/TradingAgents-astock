@@ -91,7 +91,10 @@ def profile_from_fund_master(
             unit=None,
             as_of=None,
             retrieved_at=retrieved_at,
-            source="user" if record.tracking_index_code_source == "user_supplied" else "security_master",
+            source={
+                "user_supplied": "user",
+                "catalog": "index_catalog",
+            }.get(record.tracking_index_code_source, "security_master"),
             status="ok",
             notes=record.tracking_index_code_source,
         ),

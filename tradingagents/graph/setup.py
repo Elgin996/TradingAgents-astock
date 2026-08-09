@@ -24,6 +24,7 @@ ETF_ANALYSTS: tuple[str, ...] = (
     "etf_liquidity",
     "etf_structure",
     "etf_index_news",
+    "etf_compare",
 )
 
 
@@ -154,6 +155,13 @@ class GraphSetup:
             )
             delete_nodes["etf_index_news"] = create_msg_delete()
             tool_nodes["etf_index_news"] = self.tool_nodes["etf_index_news"]
+
+        if "etf_compare" in selected_analysts:
+            analyst_nodes["etf_compare"] = create_etf_compare_analyst(
+                self.quick_thinking_llm
+            )
+            delete_nodes["etf_compare"] = create_msg_delete()
+            tool_nodes["etf_compare"] = self.tool_nodes["etf_compare"]
 
         # Create quality gate node (only grade analysts that actually ran)
         quality_gate_node = create_quality_gate(

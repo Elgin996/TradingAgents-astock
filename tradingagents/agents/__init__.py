@@ -11,6 +11,7 @@ from .analysts.social_media_analyst import create_social_media_analyst
 from .analysts.etf_liquidity_analyst import create_etf_liquidity_analyst
 from .analysts.etf_structure_analyst import create_etf_structure_analyst
 from .analysts.etf_index_news_analyst import create_etf_index_news_analyst
+from .analysts.etf_compare_analyst import create_etf_compare_analyst
 
 from .quality_gate import create_quality_gate
 
@@ -50,4 +51,5 @@ __all__ = [
     "create_etf_liquidity_analyst",
     "create_etf_structure_analyst",
     "create_etf_index_news_analyst",
+    "create_etf_compare_analyst",
 ]

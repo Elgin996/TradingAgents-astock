@@ -389,7 +389,7 @@ class _ReportPDF(FPDF):
     def header(self) -> None:
         self._use_font("", 8)
         self.set_text_color(150, 150, 150)
-        self.cell(0, 6, f"A股多Agent投研分析  |  {self.ticker_label}  |  {self.trade_date}", align="C")
+        self.cell(0, 6, f"A股个股与ETF多Agent投研分析  |  {self.ticker_label}  |  {self.trade_date}", align="C")
         self.ln(8)
         self.set_draw_color(60, 60, 60)
         self.line(10, self.get_y(), self.w - 10, self.get_y())
@@ -411,7 +411,7 @@ class _ReportPDF(FPDF):
 
         self._use_font("B", 24)
         self.set_text_color(255, 90, 31)
-        self.cell(0, 12, "A股多Agent投研分析报告", align="C")
+        self.cell(0, 12, "A股个股与ETF多Agent投研分析报告", align="C")
         self.ln(20)
 
         self._use_font("B", 36)
@@ -572,6 +572,7 @@ def _collect_sections(
                 ("etf_liquidity_report", "流动性与交易"),
                 ("etf_profile_report", "ETF 结构、份额与规模"),
                 ("etf_index_news_report", "指数新闻与政策"),
+                ("etf_compare_report", "同类比较与预警"),
                 ("data_quality_summary", "数据质量与不可得数据"),
             ]
             if key == "data_quality_summary"
@@ -669,7 +670,7 @@ def generate_markdown(final_state: dict[str, Any], ticker: str, trade_date: str,
     is_etf = final_state.get("analysis_mode") == "etf"
     profile = final_state.get("instrument_profile") or {}
     out = [
-        "# A股ETF多Agent投研分析报告" if is_etf else "# A股多Agent投研分析报告",
+        "# A股ETF多Agent投研分析报告" if is_etf else "# A股个股与ETF多Agent投研分析报告",
         "",
         f"- **{'ETF代码' if is_etf else '股票代码'}**：{ticker_label}",
         f"- **分析日期**：{trade_date}",

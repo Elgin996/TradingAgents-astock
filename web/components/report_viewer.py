@@ -42,6 +42,7 @@ _ETF_ANALYST_SECTIONS = [
     ("etf_liquidity_report", "💧 流动性与交易"),
     ("etf_profile_report", "🏷️ ETF 结构、份额与规模"),
     ("etf_index_news_report", "📰 指数新闻与政策"),
+    ("etf_compare_report", "⚖️ 同类比较与预警"),
 ]
 
 

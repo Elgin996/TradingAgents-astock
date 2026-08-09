@@ -27,6 +27,8 @@ TOOL_CAPABILITIES: dict[str, str] = {
     "get_etf_shares_aum": "shares_and_aum",
     "get_etf_announcements": "index_news_policy",
     "get_etf_quote": "liquidity_metrics",
+    "get_etf_peer_comparison": "peer_comparison",
+    "get_etf_structure_alerts": "peer_comparison",
     "get_fundamentals": "company_financials",
     "get_balance_sheet": "company_financials",
     "get_cashflow": "company_financials",

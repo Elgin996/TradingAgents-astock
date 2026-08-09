@@ -33,7 +33,7 @@ def thread_id(
 ) -> str:
     """Deterministic thread ID for a ticker, date, mode, and report schema."""
     report_schema_version = report_schema_version or (
-        "etf-v1" if analysis_mode == "etf" else "stock-v1"
+        "etf-v1.3" if analysis_mode == "etf" else "stock-v1"
     )
     return hashlib.sha256(
         f"{ticker.upper()}:{date}:{analysis_mode}:{report_schema_version}".encode()

@@ -21,12 +21,14 @@ ANALYST_NAMES = {
     "etf_liquidity": "ETF流动性分析师",
     "etf_structure": "ETF结构分析师",
     "etf_index_news": "指数新闻与政策分析师",
+    "etf_compare": "ETF比较与预警分析师",
 }
 ETF_REPORT_FIELDS = {
     "market": "market_report",
     "etf_liquidity": "etf_liquidity_report",
     "etf_structure": "etf_profile_report",
     "etf_index_news": "etf_index_news_report",
+    "etf_compare": "etf_compare_report",
 }
 ETF_FORBIDDEN_TERMS = ("公司营收", "净利润", "董监高", "解禁", "限售", "龙虎榜")
 

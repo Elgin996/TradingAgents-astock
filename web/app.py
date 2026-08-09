@@ -30,7 +30,7 @@ from web.runner import run_analysis_in_thread  # noqa: E402
 # ── Page config ──────────────────────────────────────────────────────────────
 
 st.set_page_config(
-    page_title="TradingAgents-Astock A股分析",
+    page_title="TradingAgents-Astock 个股与ETF投研",
     page_icon="📈",
     layout="wide",
     initial_sidebar_state="expanded",

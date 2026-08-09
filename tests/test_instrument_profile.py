@@ -50,6 +50,7 @@ def test_user_index_code_creates_auditable_etf_profile():
         "fund_profile",
         "index_news_policy",
         "liquidity_metrics",
+        "peer_comparison",
         "price_history",
         "shares_and_aum",
         "technical_indicators",

@@ -1,11 +1,9 @@
 """LangChain tools exposed only to ETF analysts."""
 
 from typing import Annotated
-
 from langchain_core.tools import tool
-
+from .core_stock_tools import route_to_vendor
 from tradingagents.dataflows.capability_guard import assert_tool_allowed
-from tradingagents.dataflows.interface import route_to_vendor
 
 
 @tool
@@ -32,8 +30,29 @@ def get_etf_shares_aum(symbol: Annotated[str, "6-digit ETF code"]) -> str:
 @tool
 def get_etf_announcements(
     symbol: Annotated[str, "6-digit ETF code"],
-    end_date: Annotated[str, "Analysis date in YYYY-MM-DD format"],
+    end_date: Annotated[str, "YYYY-MM-DD analysis date"],
 ) -> str:
-    """Fetch fund announcements published by the analysis date."""
+    """Fetch dated fund announcements up to the analysis date."""
     assert_tool_allowed("get_etf_announcements")
     return route_to_vendor("get_etf_announcements", symbol, end_date)
+
+
+@tool
+def get_etf_peer_comparison(
+    symbol: Annotated[str, "6-digit ETF code"],
+) -> str:
+    """Compare same-index listed ETFs on fees, disclosed shares/AUM, and liquidity.
+
+    Does not include premium/discount, tracking error, or holdings exposure.
+    """
+    assert_tool_allowed("get_etf_peer_comparison")
+    return route_to_vendor("get_etf_peer_comparison", symbol)
+
+
+@tool
+def get_etf_structure_alerts(
+    symbol: Annotated[str, "6-digit ETF code"],
+) -> str:
+    """Return rule alerts for disclosed share/AUM spikes and thin turnover."""
+    assert_tool_allowed("get_etf_structure_alerts")
+    return route_to_vendor("get_etf_structure_alerts", symbol)

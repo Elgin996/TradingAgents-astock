@@ -45,9 +45,11 @@ from .a_stock import (
 )
 from .etf_data import (
     get_etf_announcements as get_astock_etf_announcements,
+    get_etf_peer_comparison as get_astock_etf_peer_comparison,
     get_etf_profile as get_astock_etf_profile,
     get_etf_quote as get_astock_etf_quote,
     get_etf_shares_aum as get_astock_etf_shares_aum,
+    get_etf_structure_alerts as get_astock_etf_structure_alerts,
 )
 
 # Configuration and routing logic
@@ -98,12 +100,14 @@ TOOLS_CATEGORIES = {
         ]
     },
     "etf_data": {
-        "description": "ETF profile, liquidity, shares/AUM, and fund announcements",
+        "description": "ETF profile, liquidity, shares/AUM, peers, alerts, and announcements",
         "tools": [
             "get_etf_profile",
             "get_etf_quote",
             "get_etf_shares_aum",
             "get_etf_announcements",
+            "get_etf_peer_comparison",
+            "get_etf_structure_alerts",
         ],
     },
 }
@@ -194,6 +198,8 @@ VENDOR_METHODS = {
     "get_etf_quote": {"a_stock": get_astock_etf_quote},
     "get_etf_shares_aum": {"a_stock": get_astock_etf_shares_aum},
     "get_etf_announcements": {"a_stock": get_astock_etf_announcements},
+    "get_etf_peer_comparison": {"a_stock": get_astock_etf_peer_comparison},
+    "get_etf_structure_alerts": {"a_stock": get_astock_etf_structure_alerts},
 }
 
 def get_category_for_method(method: str) -> str:

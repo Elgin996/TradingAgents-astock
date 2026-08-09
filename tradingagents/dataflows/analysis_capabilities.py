@@ -16,6 +16,13 @@ ETF_PHASE_ONE_CAPABILITIES = frozenset(
         "index_news_policy",
     }
 )
+# Stage 3 subset deliverable with Stage-1 data only (no IOPV / weights / TR).
+ETF_PHASE_THREE_CAPABILITIES = frozenset(
+    {
+        "peer_comparison",
+    }
+)
+ETF_ENABLED_CAPABILITIES = ETF_PHASE_ONE_CAPABILITIES | ETF_PHASE_THREE_CAPABILITIES
 PHASE_CLOSED_CAPABILITIES = {
     "nav_iopv": "阶段 1.5 已关闭：无稳定、可审计的 IOPV 数据源",
     "premium_discount": "阶段 1.5 已关闭：无法保证价格与 IOPV 同时点可比",
@@ -32,6 +39,7 @@ ETF_ANALYST_REQUIRED_CAPABILITIES: dict[str, frozenset[str]] = {
     "etf_liquidity": frozenset({"liquidity_metrics"}),
     "etf_structure": frozenset({"fund_profile"}),
     "etf_index_news": frozenset({"index_news_policy"}),
+    "etf_compare": frozenset({"peer_comparison"}),
 }
 
 ETF_REPORT_FIELD_CAPABILITIES: dict[str, frozenset[str]] = {
@@ -39,6 +47,7 @@ ETF_REPORT_FIELD_CAPABILITIES: dict[str, frozenset[str]] = {
     "etf_liquidity_report": frozenset({"liquidity_metrics"}),
     "etf_profile_report": frozenset({"fund_profile"}),
     "etf_index_news_report": frozenset({"index_news_policy"}),
+    "etf_compare_report": frozenset({"peer_comparison"}),
 }
 
 
@@ -70,7 +79,7 @@ class AnalysisCapabilities:
             raise ValueError("ETF analysis requires a tracking index code")
         unavailable = {**PHASE_CLOSED_CAPABILITIES, **(unavailable or {})}
         return cls(
-            ETF_PHASE_ONE_CAPABILITIES - set(unavailable),
+            ETF_ENABLED_CAPABILITIES - set(unavailable),
             dict(unavailable),
         )
 

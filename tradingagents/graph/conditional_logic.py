@@ -88,6 +88,9 @@ class ConditionalLogic:
     def should_continue_etf_index_news(self, state: AgentState):
         return self._should_continue_etf_analyst(state, "etf_index_news")
 
+    def should_continue_etf_compare(self, state: AgentState):
+        return self._should_continue_etf_analyst(state, "etf_compare")
+
     def should_continue_after_quality_gate(self, state: AgentState) -> str:
         """Halt the graph when quality gate failed and policy is block."""
         if state.get("data_quality_failed") and self.quality_gate_policy == "block":

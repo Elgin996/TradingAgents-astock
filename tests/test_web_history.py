@@ -13,7 +13,14 @@ def test_history_uses_configured_results_directory(tmp_path, monkeypatch):
     log_dir = logs / "600370" / "TradingAgentsStrategy_logs"
     log_dir.mkdir(parents=True)
     (log_dir / "full_states_log_2026-06-02.json").write_text(
-        json.dumps({"final_trade_decision": "HOLD"}),
+        json.dumps(
+            {
+                "2026-06-02": {
+                    "final_trade_decision": "HOLD",
+                    "analysis_mode": "stock",
+                }
+            }
+        ),
         encoding="utf-8",
     )
     monkeypatch.setitem(history.DEFAULT_CONFIG, "results_dir", str(logs))
@@ -23,8 +30,40 @@ def test_history_uses_configured_results_directory(tmp_path, monkeypatch):
             "ticker": "600370",
             "date": "2026-06-02",
             "path": str(log_dir / "full_states_log_2026-06-02.json"),
+            "analysis_mode": "stock",
         }
     ]
+
+
+def test_history_loads_etf_mode_badge_fields(tmp_path, monkeypatch):
+    logs = tmp_path / "logs"
+    log_dir = logs / "510300" / "TradingAgentsStrategy_logs"
+    log_dir.mkdir(parents=True)
+    (log_dir / "full_states_log_2026-08-08.json").write_text(
+        json.dumps(
+            {
+                "2026-08-08": {
+                    "analysis_mode": "etf",
+                    "instrument_profile": {
+                        "tracking_index_name": "沪深300指数",
+                    },
+                    "final_trade_decision": "HOLD",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setitem(history.DEFAULT_CONFIG, "results_dir", str(logs))
+
+    entries = history.get_history()
+    assert entries[0]["analysis_mode"] == "etf"
+    assert entries[0]["instrument_profile"]["tracking_index_name"] == "沪深300指数"
+
+    from web.components.sidebar import _history_mode_badge, _history_mode_label
+
+    assert _history_mode_badge(entries[0]) == "[ETF]"
+    assert _history_mode_label(entries[0]) == "[ETF] · 沪深300指数"
+    assert _history_mode_badge({"analysis_mode": "stock"}) == "[个股]"
 
 
 def test_incomplete_task_round_trip(tmp_path, monkeypatch):

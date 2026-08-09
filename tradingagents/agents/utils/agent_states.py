@@ -69,6 +69,7 @@ class AgentState(MessagesState):
     etf_liquidity_report: Annotated[str, "ETF liquidity and trading report"]
     etf_profile_report: Annotated[str, "ETF structure and shares/AUM report"]
     etf_index_news_report: Annotated[str, "ETF index news and policy report"]
+    etf_compare_report: Annotated[str, "ETF peer comparison and rule alerts"]
 
     # data quality gate
     data_quality_summary: Annotated[str, "Quality gate assessment of all analyst reports (hard checks + LLM review)"]

@@ -30,9 +30,11 @@ from tradingagents.agents.utils.signal_data_tools import (
 )
 from tradingagents.agents.utils.etf_data_tools import (
     get_etf_announcements,
+    get_etf_peer_comparison,
     get_etf_profile,
     get_etf_quote,
     get_etf_shares_aum,
+    get_etf_structure_alerts,
 )
 
 
@@ -89,9 +91,12 @@ def build_evidence_lexicon(analysis_mode: str, capabilities: list[str] | None) -
         return ""
     return (
         "Allowed evidence: ETF price/technical data, liquidity, disclosed shares/AUM, "
-        "fund profile and announcements, tracking-index news and policy. "
+        "fund profile and announcements, tracking-index news and policy, "
+        "same-index peer fees/AUM/liquidity comparison, and rule alerts for share "
+        "or turnover deterioration. "
         "Prohibited evidence: company financials, earnings forecasts, management, "
-        "insider transactions, lockups, Dragon Tiger Board, or claims about real-time holdings. "
+        "insider transactions, lockups, Dragon Tiger Board, premium/discount without "
+        "IOPV, tracking error, index weights, PCF, or claims about real-time holdings. "
         f"Active capabilities: {', '.join(capabilities or [])}."
     )
 
@@ -208,6 +213,7 @@ def build_analysis_report_context(state: dict) -> str:
             ("etf_liquidity_report", "ETF liquidity report"),
             ("etf_profile_report", "ETF structure report"),
             ("etf_index_news_report", "Index news and policy report"),
+            ("etf_compare_report", "ETF peer comparison and rule alerts"),
         ]
         parts = []
         for field, label in sections:

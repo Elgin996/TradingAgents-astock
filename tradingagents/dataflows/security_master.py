@@ -23,6 +23,7 @@ import pandas as pd
 import requests
 
 from .a_stock import _get_mootdx_client
+from .index_catalog import lookup_tracking_index_code
 from .utils import safe_ticker_component
 
 
@@ -31,7 +32,7 @@ FundClassification = Literal[
     "unsupported_etf",
     "not_etf",
 ]
-TrackingIndexCodeSource = Literal["missing", "user_supplied"]
+TrackingIndexCodeSource = Literal["missing", "user_supplied", "catalog"]
 
 
 @dataclass(frozen=True)
@@ -133,18 +134,31 @@ def resolve_fund_master(symbol: str) -> FundMasterRecord:
     fields = _fetch_profile_fields(code)
     classification, reason = _classify(fields)
 
+    tracking_index_name = fields.get("跟踪标的")
+    tracking_index_code = None
+    tracking_index_provider = None
+    tracking_index_code_source: TrackingIndexCodeSource = "missing"
+    if classification == "domestic_equity_etf":
+        catalog_hit = lookup_tracking_index_code(tracking_index_name)
+        if catalog_hit:
+            tracking_index_code, tracking_index_provider = catalog_hit
+            tracking_index_code_source = "catalog"
+
     return FundMasterRecord(
         symbol=code,
         exchange=exchange,
         fund_name=fields.get("基金简称") or fields["基金全称"],
         fund_type=fields["基金类型"],
-        tracking_index_name=fields.get("跟踪标的"),
+        tracking_index_name=tracking_index_name,
         fund_manager=fields.get("基金管理人"),
         listed_or_established_date=fields.get("成立日期/规模"),
         management_fee=fields.get("管理费率"),
         custodian_fee=fields.get("托管费率"),
         classification=classification,
         classification_reason=reason,
+        tracking_index_code=tracking_index_code,
+        tracking_index_provider=tracking_index_provider,
+        tracking_index_code_source=tracking_index_code_source,
     )
 
 

@@ -56,15 +56,49 @@ def _format_price_limit_caption(profile: dict[str, Any]) -> str:
     return f"涨跌幅 {value}%（{status_cn}）"
 
 
-def _history_mode_label(entry: dict[str, Any]) -> str:
+def _history_mode_badge(entry: dict[str, Any]) -> str:
+    """Compact mode badge for history / incomplete task rows."""
     mode = entry.get("analysis_mode") or "stock"
     if mode == "etf":
+        return "[ETF]"
+    return "[个股]"
+
+
+def _history_mode_detail(entry: dict[str, Any]) -> str:
+    """Optional trailing detail after the badge (ETF tracking index name)."""
+    if (entry.get("analysis_mode") or "stock") != "etf":
+        return ""
+    profile = entry.get("instrument_profile") or {}
+    if not isinstance(profile, dict):
+        return ""
+    index_name = profile.get("tracking_index_name") or ""
+    if not index_name and isinstance(profile.get("tracking_index_code"), dict):
+        # Frozen InstrumentProfile shape stores the nested DataPoint only.
         index_name = ""
-        profile = entry.get("instrument_profile") or {}
-        if isinstance(profile, dict):
-            index_name = profile.get("tracking_index_name") or ""
-        return f"ETF{(' · ' + index_name) if index_name else ''}"
-    return "个股"
+    return f" · {index_name}" if index_name else ""
+
+
+def _tracking_index_display(profile: dict[str, Any]) -> tuple[str | None, str | None, str]:
+    """Return (code, provider, source_status) from flat or frozen profile shapes."""
+    raw = profile.get("tracking_index_code")
+    provider = profile.get("tracking_index_provider")
+    status = str(profile.get("tracking_index_code_status") or "missing")
+    if isinstance(raw, dict):
+        value = raw.get("value")
+        if isinstance(value, dict):
+            code = value.get("code")
+            provider = value.get("provider") or provider
+        else:
+            code = value
+        status = str(raw.get("notes") or status)
+        return (str(code) if code else None), (str(provider) if provider else None), status
+    if raw:
+        return str(raw), (str(provider) if provider else None), status
+    return None, None, status
+
+
+def _history_mode_label(entry: dict[str, Any]) -> str:
+    return f"{_history_mode_badge(entry)}{_history_mode_detail(entry)}"
 
 
 def _resolve_user_input(raw: str) -> tuple[str, str | None]:
@@ -99,7 +133,16 @@ def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, 
         return "unknown", None, f"证券主数据暂不可用，请重试：{exc}"
 
     if record.classification == "domestic_equity_etf":
-        from tradingagents.dataflows.instrument import derive_price_limit_pct
+        from tradingagents.dataflows.instrument import (
+            derive_price_limit_pct,
+            profile_from_fund_master,
+        )
+
+        # Catalog-backed codes freeze immediately into the InstrumentProfile
+        # shape. Missing codes stay as a lightweight recognition dict until the
+        # user supplies provider-qualified identifiers.
+        if record.tracking_index_code and record.tracking_index_provider:
+            return "etf", profile_from_fund_master(record).to_dict(), None
 
         price_limit = derive_price_limit_pct(
             symbol=record.symbol,
@@ -424,7 +467,7 @@ def render_sidebar() -> None:
         <div style="text-align:center; margin-bottom:1.5rem;">
             <span style="font-size:2rem; font-weight:800; color:#ff5a1f;">Trading</span><span style="font-size:2rem; font-weight:800; color:#f5f1eb;">Agents</span><span style="font-size:2rem; font-weight:800; color:#f5f1eb;">-</span><span style="font-size:2rem; font-weight:800; color:#ff5a1f;">Astock</span>
             <div style="font-size:0.85rem; color:#888; margin-top:0.2rem;">
-                A股多Agent投研系统
+                A股个股与ETF多Agent投研系统
             </div>
             <div style="font-size:0.7rem; color:#555; margin-top:0.3rem;">
                 by <a href="https://github.com/simonlin1212" style="color:#ff5a1f; text-decoration:none;">simonlin1212</a>
@@ -493,14 +536,17 @@ def render_sidebar() -> None:
         exchange_cn = _EXCHANGE_CN.get(
             instrument_profile["exchange"], instrument_profile["exchange"]
         )
-        st.success(
-            f"识别为 ETF · {instrument_profile['fund_name']} · {exchange_cn}"
+        fund_name = instrument_profile.get("fund_name") or instrument_profile.get(
+            "symbol", resolved_code
         )
+        st.success(f"识别为 ETF · {fund_name} · {exchange_cn}")
         limit_caption = _format_price_limit_caption(instrument_profile)
-        st.caption(
-            f"跟踪 {instrument_profile['tracking_index_name']} · T+1 · {limit_caption}"
+        index_name = instrument_profile.get("tracking_index_name") or "未提供"
+        st.caption(f"跟踪 {index_name} · T+1 · {limit_caption}")
+        index_code, index_provider, index_status = _tracking_index_display(
+            instrument_profile
         )
-        if instrument_profile["tracking_index_code"] is None:
+        if index_code is None:
             st.caption("该基金资料未提供指数代码，请在开始前填写并确认来源。")
             code_col, provider_col = st.columns(2)
             user_index_code = code_col.text_input(
@@ -522,9 +568,14 @@ def render_sidebar() -> None:
                 if instrument_error:
                     st.caption(f"❌ {instrument_error}")
         else:
+            status_cn = {
+                "catalog": "目录映射",
+                "user_supplied": "用户确认",
+                "missing": "缺失",
+            }.get(index_status, index_status)
             st.caption(
-                f"指数代码：{instrument_profile['tracking_index_provider']} · "
-                f"{instrument_profile['tracking_index_code']}"
+                f"指数代码：{index_provider or '未知供应方'} · {index_code}"
+                f"（{status_cn}；点击开始即确认）"
             )
     elif resolved_code:
         st.success(f"识别为 股票 · {resolved_code}")
@@ -540,7 +591,7 @@ def render_sidebar() -> None:
         or (
             analysis_mode == "etf"
             and instrument_profile is not None
-            and instrument_profile["tracking_index_code"] is None
+            and _tracking_index_display(instrument_profile)[0] is None
         )
     )
 
@@ -606,9 +657,14 @@ def render_sidebar() -> None:
 
     for entry in history[:20]:
         t, d = entry["ticker"], entry["date"]
+        mode = entry.get("analysis_mode") or "stock"
         mode_label = _history_mode_label(entry)
         label = f"{t}  ·  {d}  ·  {mode_label}"
-        if st.button(label, key=f"hist_{t}_{d}_{mode_label}", use_container_width=True):
+        if st.button(
+            label,
+            key=f"hist_{t}_{d}_{mode}",
+            use_container_width=True,
+        ):
             st.session_state["viewing_history"] = entry["path"]
             st.session_state["start_analysis"] = None
 

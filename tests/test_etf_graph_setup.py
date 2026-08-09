@@ -14,6 +14,7 @@ def test_etf_mode_has_only_etf_appropriate_analysts():
         "etf_liquidity",
         "etf_structure",
         "etf_index_news",
+        "etf_compare",
     }
     assert not {"fundamentals", "hot_money", "lockup", "social"} & set(ETF_ANALYSTS)
 
@@ -32,12 +33,29 @@ def test_capability_probe_prunes_etf_analysts_and_stages():
     selected = resolve_analysts("etf", capabilities)
     assert selected == ("market", "etf_structure", "etf_index_news")
     assert "etf_liquidity" not in selected
+    assert "etf_compare" not in selected
 
     stages = stages_for("etf", capabilities)
     stage_ids = [stage["id"] for stage in stages]
     assert "etf_liquidity" not in stage_ids
+    assert "etf_compare" not in stage_ids
     assert "market" in stage_ids
     assert "quality_gate" in stage_ids
+
+
+def test_peer_comparison_capability_keeps_compare_analyst():
+    capabilities = [
+        "price_history",
+        "technical_indicators",
+        "liquidity_metrics",
+        "fund_profile",
+        "shares_and_aum",
+        "index_news_policy",
+        "peer_comparison",
+    ]
+    assert "etf_compare" in resolve_analysts("etf", capabilities)
+    assert report_field_is_active("etf_compare_report", capabilities)
+    assert "etf_compare" in [stage["id"] for stage in stages_for("etf", capabilities)]
 
 
 def test_filter_etf_analysts_helper():

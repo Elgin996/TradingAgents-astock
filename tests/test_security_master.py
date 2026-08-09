@@ -98,8 +98,9 @@ def test_resolve_fund_master_combines_independent_exchange_and_type_sources(monk
     assert record.exchange == "SSE"
     assert record.classification == "domestic_equity_etf"
     assert record.tracking_index_name == "沪深300指数"
-    assert record.tracking_index_code is None
-    assert record.tracking_index_code_source == "missing"
+    assert record.tracking_index_code == "000300"
+    assert record.tracking_index_provider == "CSI"
+    assert record.tracking_index_code_source == "catalog"
 
 
 @pytest.mark.unit

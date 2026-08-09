@@ -37,7 +37,7 @@ class Propagator:
             "instrument_profile": instrument_profile,
             "analysis_capabilities": analysis_capabilities or [],
             "analysis_unavailable_capabilities": analysis_unavailable_capabilities or {},
-            "report_schema_version": "etf-v1" if analysis_mode == "etf" else "stock-v1",
+            "report_schema_version": "etf-v1.3" if analysis_mode == "etf" else "stock-v1",
             "past_context": past_context,
             "investment_debate_state": InvestDebateState(
                 {

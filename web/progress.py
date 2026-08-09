@@ -27,6 +27,7 @@ ETF_PIPELINE_STAGES: list[dict[str, str]] = [
     {"id": "etf_liquidity", "name": "流动性", "icon": "💧", "report_key": "etf_liquidity_report"},
     {"id": "etf_structure", "name": "ETF结构", "icon": "🏷️", "report_key": "etf_profile_report"},
     {"id": "etf_index_news", "name": "指数新闻政策", "icon": "📰", "report_key": "etf_index_news_report"},
+    {"id": "etf_compare", "name": "同类比较预警", "icon": "⚖️", "report_key": "etf_compare_report"},
     {"id": "quality_gate", "name": "质量门控", "icon": "✅", "report_key": "data_quality_summary"},
     {"id": "debate", "name": "多空辩论", "icon": "⚔️", "report_key": "investment_plan"},
     {"id": "trader", "name": "交易决策", "icon": "💹", "report_key": "trader_investment_plan"},

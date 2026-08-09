@@ -47,6 +47,8 @@ from tradingagents.agents.utils.agent_utils import (
     get_etf_quote,
     get_etf_shares_aum,
     get_etf_announcements,
+    get_etf_peer_comparison,
+    get_etf_structure_alerts,
 )
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -318,6 +320,9 @@ class TradingAgentsGraph:
             ),
             "etf_index_news": ToolNode(
                 [get_news, get_global_news, get_etf_announcements]
+            ),
+            "etf_compare": ToolNode(
+                [get_etf_peer_comparison, get_etf_structure_alerts]
             ),
         }
 
@@ -775,7 +780,7 @@ class TradingAgentsGraph:
             ),
             "report_schema_version": final_state.get(
                 "report_schema_version",
-                "etf-v1" if self.analysis_mode == "etf" else "stock-v1",
+                "etf-v1.3" if self.analysis_mode == "etf" else "stock-v1",
             ),
             "instrument_profile": final_state.get(
                 "instrument_profile", self.instrument_profile
@@ -790,6 +795,7 @@ class TradingAgentsGraph:
             "etf_liquidity_report": final_state.get("etf_liquidity_report", ""),
             "etf_profile_report": final_state.get("etf_profile_report", ""),
             "etf_index_news_report": final_state.get("etf_index_news_report", ""),
+            "etf_compare_report": final_state.get("etf_compare_report", ""),
             "investment_debate_state": {
                 "bull_history": invest.get("bull_history", ""),
                 "bear_history": invest.get("bear_history", ""),
