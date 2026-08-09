@@ -229,6 +229,9 @@ class TestParseRatingWordBoundary:
             ("建议：**Sell**-off risk remains elevated", "Hold"),
             ("最终评级：**Buy**-side interest is weak", "Hold"),
             ("最终评级：**Buy**2024", "Hold"),
+            # 连字符要看后面：跟字母是构词（拒），跟空白只是分隔符（收，第九轮）
+            ("最终评级：**Sell**- 退出", "Sell"),
+            ("最终评级：Sell- 退出", "Sell"),
             # —— 中文评级词不受影响 ——
             ("最终评级：买入", "Buy"),
             ("最终评级：卖出", "Sell"),

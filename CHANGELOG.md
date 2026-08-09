@@ -6,6 +6,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.14] — 2026-08-09
+
+### 修复：连字符分隔符被当成构词，评级被静默丢弃
+
+`最终评级：**Sell**- 退出` 里的 `-` 只是分隔符，却被当成"会延续成更长的词"而判否，
+`parse_rating` 静默返回 Hold —— 记录下错误的决策。
+
+判据再补一层：**连字符要看它后面**。跟字母/数字是构词（`Sell-off` / `Buy-side` 拒），
+跟空白或其它字符只是分隔符（`Sell- 退出` 收）。覆盖矩阵扩到 27 例。
+
+### 修复：版本号三处不同步
+
+上一版改了 `pyproject.toml` 和 `CHANGELOG.md`，**漏了 `CLAUDE.md` 的「当前版本」行**
+—— 后续 agent 和发版流程读它会拿到旧版本。
+
+新增 `tests/test_version_consistency.py`：三处不一致直接测试失败，不再靠人记得。
+
+### 测试
+
+369 passed / 13 skipped / **0 failed**（新增 4 例）。
+
+---
+
 ## [0.5.13] — 2026-08-09
 
 ### 修复：加粗 + 连字符仍会被判成评级（正则回溯）
