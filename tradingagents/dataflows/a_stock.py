@@ -362,6 +362,29 @@ def _get_mootdx_client():
 
     from mootdx.quotes import Quotes
 
+    # ⚠️ mootdx 的 `StdQuotes.__init__` 里有 `config.set('BESTIP', {'HQ': self.server})`
+    # ——每建一次带 server 的 client 都会**持久化写入它的配置文件**。逐台探测 38 个候选
+    # 就等于把用户原本配好的服务器一路覆写掉，最后留在配置里的是最后一台**失败的**
+    # 服务器；下面的裸 factory 兜底（它读 BESTIP）也就再也救不回来，还会连累同一台
+    # 机器上其它用 mootdx 的程序。所以探测前先快照，选不出可用服务器时原样还回去。
+    saved_bestip = None
+    try:
+        from mootdx import config as _mootdx_config
+        saved_bestip = _mootdx_config.get("BESTIP")
+        if isinstance(saved_bestip, dict):
+            saved_bestip = dict(saved_bestip)
+    except Exception as e:  # 版本差异导致取不到就跳过恢复，别影响主流程
+        logger.debug("读取 mootdx BESTIP 失败，探测后不做恢复：%s", e)
+
+    def _restore_bestip():
+        if saved_bestip is None:
+            return
+        try:
+            from mootdx import config as _cfg
+            _cfg.set("BESTIP", saved_bestip)
+        except Exception as e:
+            logger.debug("恢复 mootdx BESTIP 失败：%s", e)
+
     # TCP 预筛并发跑：38 台里多数是"连都连不上"，串行每台要等满超时（实测整轮
     # 73.7s，首次调用像卡死）。预筛纯粹是等 IO，并发不改变选取语义——下面仍按
     # 原顺序、逐台做真实取数验证，精选表依旧优先。
@@ -387,6 +410,10 @@ def _get_mootdx_client():
             logger.debug("mootdx %s:%s 建连成功但取不到数，换下一台", ip, port)
 
 
+    # 裸 factory 读的就是 BESTIP，而上面的逐台探测已经把它覆写了——必须先还原成
+    # 用户原本配置的那台，这个兜底才有意义。
+    _restore_bestip()
+
     # 最后再试一次裸 factory（老用户的 mootdx config 里可能已存了可用 IP）。
     # ⚠️ 刻意**不用** `bestip=True`：它会把整张主机表做一遍测速，实测要几分钟。
     # 上面 `_candidate_tdx_servers()` 已经把 mootdx 自带的完整主机表逐台验证过了，
@@ -401,6 +428,9 @@ def _get_mootdx_client():
             logger.info("mootdx client from factory(%s)", kwargs)
             _mootdx_client = candidate
             return _mootdx_client
+
+    # 一台都没选出来：把 BESTIP 还原成探测前的样子，别留下一台死服务器
+    _restore_bestip()
 
     _mootdx_unavailable_until = time.time() + _MOOTDX_RETRY_AFTER_S
     if tcp_ok_but_dead:

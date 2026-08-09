@@ -59,8 +59,12 @@ _CN_LABEL_RE = re.compile(_CN_LABEL_PREFIX + r"(" + _CN_ALT + r")")
 # 英文标签规则要求出现 "rating"；中文标签规则只认中文评级词；裸英文词扫描按
 # 空白切分，"最终评级：Buy" 是**一个** token，`strip("*:.,")` 又剥不掉全角冒号。
 # 结果是静默落到默认值 Hold —— 决策评级被悄悄改写，报告里完全看不出来。
+# ⚠️ 末尾的 `(?![A-Za-z])` 不能省：没有词边界时 `最终评级：Buyer interest remains weak`
+# 会被判成 Buy、`建议：Selling pressure is high` 判成 Sell。这类误判会被写进记忆日志，
+# 再污染决策绩效统计——而且从报告里完全看不出来。
 _CN_LABEL_EN_RE = re.compile(
-    _CN_LABEL_PREFIX + r"(" + "|".join(RATINGS_5_TIER) + r")", re.IGNORECASE
+    _CN_LABEL_PREFIX + r"(" + "|".join(RATINGS_5_TIER) + r")(?![A-Za-z])",
+    re.IGNORECASE,
 )
 # Bare Chinese rating term anywhere (last-resort fallback).
 _CN_TERM_RE = re.compile(_CN_ALT)

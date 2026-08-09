@@ -6,6 +6,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.10] — 2026-08-09
+
+Codex 第五轮的两处，都是新增行为自己带出来的副作用。
+
+### 修复：探测服务器会覆写用户配置的 mootdx 服务器
+
+mootdx 的 `StdQuotes.__init__` 里有 `config.set('BESTIP', {'HQ': self.server})`
+——**每建一次带 `server` 的 client 都会持久化写进它的配置文件**。v0.5.6 把候选表从
+10 台扩到 38 台之后，逐台探测等于把用户原本配好的服务器一路覆写，最后留在配置里的
+是最后一台**失败的**服务器：
+
+- 下面那个裸 `Quotes.factory()` 兜底读的正是 BESTIP，于是再也救不回来；
+- 更糟的是同一台机器上**其它用 mootdx 的程序**也会被留下一台死服务器。
+
+现在探测前先快照 BESTIP，裸 factory 兜底之前、以及一台都没选出来时都还原回去。
+
+### 修复：中文标签后跟英文散文会被误判成评级
+
+`_CN_LABEL_EN_RE` 缺词边界，于是：
+
+| 文本 | 修复前 | 修复后 |
+|---|---|---|
+| `最终评级：Buyer interest remains weak` | Buy ❌ | Hold |
+| `建议：Selling pressure is high` | Sell ❌ | Hold |
+| `最终评级：Holder structure changed` | Hold（碰巧对） | Hold |
+
+这类误判会被写进记忆日志，再污染 `tradingagents performance` 的评级统计，
+而且从报告里完全看不出来。已加 `(?![A-Za-z])`，正常的中英混排（`最终评级：Buy`）
+不受影响。
+
+### 测试
+
+338 passed / 13 skipped / **0 failed**（新增 4 例）。
+
+---
+
 ## [0.5.9] — 2026-08-09
 
 ### 🔴 修复：裸跑 `tradingagents` 被 v0.5.2 打断（升级即破坏）

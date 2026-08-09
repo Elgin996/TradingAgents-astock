@@ -257,3 +257,24 @@ def test_bestip_is_never_used(handshake_fails):
         a_stock._get_mootdx_client()
 
     assert handshake_fails["bestip_used"] is False
+
+
+def test_probing_restores_mootdx_bestip_when_nothing_works(handshake_fails, monkeypatch):
+    """探测不能把用户配好的服务器覆写掉（codex 第五轮）。
+
+    mootdx 的 StdQuotes.__init__ 里有 `config.set('BESTIP', {'HQ': self.server})`
+    ——每建一次带 server 的 client 都会持久化写入配置文件。逐台探测 38 个候选等于
+    一路覆写，最后留下的是最后一台**失败的**服务器，裸 factory 兜底（读 BESTIP）
+    再也救不回来，还会连累同机上其它用 mootdx 的程序。
+    """
+    from mootdx import config as mootdx_config
+
+    original = {"HQ": ("1.2.3.4", 7709), "EX": "", "GP": ""}
+    store = {"BESTIP": dict(original)}
+    monkeypatch.setattr(mootdx_config, "get", lambda k: store.get(k))
+    monkeypatch.setattr(mootdx_config, "set", lambda k, v: store.__setitem__(k, v))
+
+    with pytest.raises(RuntimeError):
+        a_stock._get_mootdx_client()
+
+    assert store["BESTIP"] == original, "全部探测失败后应把 BESTIP 还原成原样"

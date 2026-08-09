@@ -168,3 +168,29 @@ class TestSignalProcessor:
     def test_default_when_no_rating_present(self):
         sp = SignalProcessor()
         assert sp.process_signal("Plain prose without a recommendation.") == "Hold"
+
+
+@pytest.mark.unit
+class TestParseRatingWordBoundary:
+    """中文标签后跟英文散文时，不能把词首当成完整评级（codex 第五轮）。
+
+    没有词边界的话 `最终评级：Buyer interest remains weak` 会被判成 Buy、
+    `建议：Selling pressure is high` 判成 Sell。这类误判会写进记忆日志，
+    再污染决策绩效统计——而且从报告里完全看不出来。
+    """
+
+    def test_english_prose_after_cn_label_is_not_a_rating(self):
+        assert parse_rating("最终评级：Buyer interest remains weak") == "Hold"
+        assert parse_rating("建议：Selling pressure is high") == "Hold"
+        assert parse_rating("最终评级：Holder structure changed") == "Hold"
+
+    def test_real_mixed_ratings_still_parse(self):
+        """加了边界不能误伤正常的中英混排。"""
+        assert parse_rating("最终评级：Buy") == "Buy"
+        assert parse_rating("最终评级：Sell\n理由若干。") == "Sell"
+        assert parse_rating("投资建议：Overweight") == "Overweight"
+        assert parse_rating("评级 - buy") == "Buy"
+
+    def test_chinese_terms_unaffected(self):
+        assert parse_rating("最终评级：买入") == "Buy"
+        assert parse_rating("最终评级：卖出") == "Sell"
