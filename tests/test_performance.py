@@ -18,7 +18,7 @@ from tradingagents.performance import (
 )
 
 
-def entry(date, ticker, rating, raw=None, alpha=None, holding="5", pending=False):
+def entry(date, ticker, rating, raw=None, alpha=None, holding="5d", pending=False):
     return {
         "date": date, "ticker": ticker, "rating": rating,
         "pending": pending, "raw": raw, "alpha": alpha, "holding": holding,
@@ -71,7 +71,7 @@ def test_missing_alpha_is_none_not_zero():
 # ---------------------------------------------------------------------------
 
 
-def test_win_rate_and_averages():
+def test_up_rate_and_averages():
     s = summarize([
         entry("2026-01-01", "600519", "Buy", "+10.0%", "+5.0%"),
         entry("2026-01-02", "600519", "Buy", "-4.0%", "-2.0%"),
@@ -79,19 +79,19 @@ def test_win_rate_and_averages():
     ])
     o = s["overall"]
     assert o["count"] == 3
-    assert o["win_rate"] == pytest.approx(2 / 3)
+    assert o["up_rate"] == pytest.approx(2 / 3)
     assert o["avg_return"] == pytest.approx(0.04)
     assert o["best"] == pytest.approx(0.10)
     assert o["worst"] == pytest.approx(-0.04)
 
 
-def test_alpha_win_rate_ignores_records_without_alpha():
+def test_outperform_rate_ignores_records_without_alpha():
     s = summarize([
         entry("2026-01-01", "600519", "Buy", "+10.0%", "+5.0%"),
         entry("2026-01-02", "600519", "Buy", "+1.0%", None),
     ])
     # 只有 1 条有 alpha，且为正
-    assert s["overall"]["alpha_win_rate"] == pytest.approx(1.0)
+    assert s["overall"]["outperform_rate"] == pytest.approx(1.0)
 
 
 def test_grouping_by_rating_and_ticker():
@@ -174,7 +174,72 @@ def test_report_states_it_is_not_a_backtest():
     assert "不构成任何投资建议" in report
 
 
-def test_report_highlights_alpha_over_raw_win_rate():
-    """A 股 beta 强，光看胜率会高估判断力——报告要点破这一点。"""
+def test_report_highlights_alpha_over_raw_return():
+    """A 股 beta 强，光看绝对收益会高估判断力——报告要点破这一点。"""
     report = format_report(summarize(many(MIN_MEANINGFUL_SAMPLE)))
-    assert "alpha 胜率" in report
+    assert "alpha" in report
+
+
+# ---------------------------------------------------------------------------
+# codex 审计补的两条
+# ---------------------------------------------------------------------------
+
+
+def test_bearish_call_that_fell_counts_as_correct():
+    """给 Sell 之后股价跌了＝判断正确。
+
+    原实现只看"收益是否为正"，会把这种正确判断记成失败、把随后的上涨记成成功，
+    于是所谓"胜率"根本不是决策准确率（codex P2）。
+    """
+    s = summarize([
+        entry("2026-01-01", "600519", "Sell", "-8.0%", "-5.0%"),
+        entry("2026-01-02", "000001", "Sell", "+8.0%", "+5.0%"),
+    ])
+    o = s["overall"]
+    assert o["direction_accuracy"] == pytest.approx(0.5)
+    assert o["up_rate"] == pytest.approx(0.5)      # 标的涨跌各一，与判断对错无关
+
+
+def test_bullish_and_bearish_both_correct():
+    s = summarize([
+        entry("2026-01-01", "600519", "Buy", "+8.0%", "+5.0%"),
+        entry("2026-01-02", "000001", "Sell", "-8.0%", "-5.0%"),
+    ])
+    assert s["overall"]["direction_accuracy"] == pytest.approx(1.0)
+
+
+def test_hold_is_excluded_from_direction_accuracy():
+    """Hold 没有表态，不该被判对错。"""
+    s = summarize([
+        entry("2026-01-01", "600519", "Hold", "+8.0%", "+5.0%"),
+        entry("2026-01-02", "000001", "Buy", "+8.0%", "+5.0%"),
+    ])
+    o = s["overall"]
+    assert o["directional_count"] == 1
+    assert o["direction_accuracy"] == pytest.approx(1.0)
+
+
+def test_direction_accuracy_is_none_without_directional_ratings():
+    s = summarize([entry("2026-01-01", "600519", "Hold", "+8.0%", "+5.0%")])
+    assert s["overall"]["direction_accuracy"] is None
+
+
+def test_holding_days_with_d_suffix_is_parsed():
+    """记忆日志写的是 `5d`，直接 int() 会抛 → 平均持有期永远缺失（codex P2）。"""
+    s = summarize([
+        entry("2026-01-01", "600519", "Buy", "+1.0%", "+1.0%", holding="5d"),
+        entry("2026-01-02", "600519", "Buy", "+1.0%", "+1.0%", holding="7d"),
+    ])
+    assert s["avg_holding_days"] == pytest.approx(6.0)
+
+
+def test_report_shows_average_holding_days():
+    s = summarize(many(MIN_MEANINGFUL_SAMPLE))
+    assert "平均持有" in format_report(s)
+
+
+def test_report_warns_that_up_rate_is_not_accuracy():
+    """报告必须点破：上涨占比不是判断准确率，否则读者会看反。"""
+    report = format_report(summarize(many(MIN_MEANINGFUL_SAMPLE)))
+    assert "方向正确率" in report
+    assert "判断正确" in report

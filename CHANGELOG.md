@@ -6,6 +6,54 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.5] — 2026-08-09
+
+Codex 审计后的五处修复。全部实测复现，无一误报。
+
+### 修复：截断告警对**默认 provider** 根本不会响
+
+`warn_if_truncated` 只认 Anthropic 的 `stop_reason=max_tokens` 与 Chat Completions
+的 `finish_reason=length`。但 `openai` 是默认 provider 且走 **Responses API**，它的
+截断信号是 `status="incomplete"` + `incomplete_details.reason="max_output_tokens"`；
+Gemini 则是大写的 `finish_reason="MAX_TOKENS"`。两种都不匹配 —— 也就是说 v0.5.1
+新加的这个告警，在默认配置下**一次都不会触发**。现已覆盖四种形状（值比较统一转小写），
+并新增反向用例：因内容过滤而 `incomplete` 不该被报成输出上限。
+
+### 修复：非 A 股防护漏了三个 vendor
+
+`get_dragon_tiger_board` / `get_lockup_expiry` / `get_industry_comparison` 直接调
+`safe_ticker_component`，绕过了 `_normalize_ticker`。实测拿港股 `00700` 调用，返回的
+是**看起来完全正常的报告**——「近30日未上龙虎榜」「无历史解禁记录」——模型会当成腾讯
+的事实。v0.5.3 声称的"一个卡点覆盖 15 个接口"并不成立，现已全部接入。
+
+### 修复：绩效统计对看空评级把对错算反了
+
+给出 Sell / Underweight 之后股价下跌，是**判断正确**，但原实现只看"收益是否为正"，
+把它记成失败、把随后的上涨记成成功——所谓"胜率"根本不是决策准确率。
+
+- 新增 **`direction_accuracy`（方向正确率）**：只统计有方向的评级（Hold 不表态不计入），
+  按方向判定（看多要跑赢、看空要跑输），优先用 alpha 口径。
+- 原两个指标改名为 `up_rate`（标的上涨占比）/ `outperform_rate`（跑赢占比），
+  **命名即口径**，报告里明确写出它们与判断对错无关。
+
+### 修复：平均持有期永远显示不出来
+
+记忆日志写的是 `5d`（带后缀），`int("5d")` 抛异常被吞成 `None`，于是每条记录的持有期
+都丢失、`avg_holding_days` 恒为空。改为提取数字部分。
+
+### 修复：mootdx 提前收手会漏掉可用服务器
+
+v0.5.1 加的「连续 3 台协议失败就停手」被指出证明力不足：三台远端拒绝**推不出**本地
+网络封了协议，而列表靠后的服务器完全可能是好的，提前收手会让它永远试不到、还顺手记
+5 分钟负缓存。已移除，改为跑完整张表。实测代价仅 18.7s → 23.7s（最初是 >170s，真正
+的耗时大头 bestip 全表测速仍单独规避）。新增用例：可用服务器排在末位时仍能被选中。
+
+### 测试
+
+316 passed / 13 skipped / **0 failed**（新增 13 例）。
+
+---
+
 ## [0.5.4] — 2026-08-06
 
 干净 clone 上 `pytest` 从 11 red 变成全绿，并修掉藏在其中的一个计费护栏隐患。

@@ -80,8 +80,13 @@ def test_openai_client_forwards_max_tokens():
 @pytest.mark.parametrize(
     "metadata",
     [
-        {"stop_reason": "max_tokens"},   # Anthropic
-        {"finish_reason": "length"},     # OpenAI 兼容
+        {"stop_reason": "max_tokens"},                       # Anthropic
+        {"finish_reason": "length"},                         # OpenAI 兼容 Chat
+        {"finish_reason": "MAX_TOKENS"},                     # Gemini（大写）
+        # OpenAI Responses API —— `openai` 是**默认 provider** 且走这条路径，
+        # 漏掉它等于默认配置下这个告警根本不会响（codex P1）
+        {"status": "incomplete",
+         "incomplete_details": {"reason": "max_output_tokens"}},
     ],
 )
 def test_truncated_response_is_reported(metadata, caplog):
@@ -97,6 +102,10 @@ def test_truncated_response_is_reported(metadata, caplog):
     [
         {"stop_reason": "end_turn"},
         {"finish_reason": "stop"},
+        {"finish_reason": "STOP"},
+        # 因为别的原因 incomplete（如内容过滤）不是输出上限，不该报 max_tokens
+        {"status": "incomplete", "incomplete_details": {"reason": "content_filter"}},
+        {"status": "completed"},
         {},
     ],
 )

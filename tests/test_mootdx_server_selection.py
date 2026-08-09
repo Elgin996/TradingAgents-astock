@@ -184,14 +184,44 @@ def handshake_fails(monkeypatch):
 
 
 def test_handshake_failure_counts_as_protocol_failure(handshake_fails):
-    """握手期就炸的服务器要被算进协议失败，从而触发提前收手。"""
+    """握手期就炸的服务器要被算进协议失败（决定报错文案与是否跑 bestip）。
+
+    ⚠️ 这里**必须把整张表试完**。曾经加过「连续 3 台失败就停手」，被 codex 指出：
+    三台远端拒绝证明不了本地封了协议，列表靠后的服务器完全可能是好的，提前收手
+    会让那台永远试不到、还顺手记 5 分钟负缓存。
+    """
     with pytest.raises(RuntimeError, match="协议握手/取数被拒"):
         a_stock._get_mootdx_client()
 
     tried = [c for c in handshake_fails["factory_calls"] if c != "bare"]
-    assert len(tried) == a_stock._MAX_PROTOCOL_FAILURES, (
-        f"连续协议失败后应停手，实际试了 {len(tried)} 台"
+    assert len(tried) == len(a_stock._TDX_SERVERS), (
+        f"应当把整张服务器表试完，实际只试了 {len(tried)} 台"
     )
+
+
+def test_later_working_server_is_still_found(handshake_fails, monkeypatch):
+    """前几台协议失败不能妨碍后面那台可用服务器被选中（codex P2）。"""
+    import mootdx.quotes
+    import pandas as pd
+
+    good_ip = a_stock._TDX_SERVERS[-1][0]
+
+    class GoodClient:
+        ip = good_ip
+
+        def bars(self, **kwargs):
+            return pd.DataFrame({"close": [1700.0]})
+
+    class FakeQuotes:
+        @staticmethod
+        def factory(market="std", server=None, **kwargs):
+            if server and server[0] == good_ip:
+                return GoodClient()
+            raise ConnectionResetError("[Errno 54] Connection reset by peer")
+
+    monkeypatch.setattr(mootdx.quotes, "Quotes", FakeQuotes)
+
+    assert a_stock._get_mootdx_client().ip == good_ip
 
 
 def test_bestip_skipped_when_protocol_is_the_problem(handshake_fails):

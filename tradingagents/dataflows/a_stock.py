@@ -249,9 +249,10 @@ _TDX_CANARY_SYMBOL = "600519"
 _MOOTDX_RETRY_AFTER_S = 300.0
 _mootdx_unavailable_until = 0.0
 
-# 连续这么多台「端口开着但通达信协议被拒」就不再往下试。这种连续失败指向的是
-# 协议层被拦（代理 / 防火墙 / 网络策略），换服务器解决不了，逐台试满只是干等。
-_MAX_PROTOCOL_FAILURES = 3
+# ⚠️ 曾经加过「连续 N 台协议失败就停手」的提前退出，已移除：三台远端拒绝**证明不了**
+# 本地网络封了协议，而列表里靠后的服务器完全可能是好的。提前收手会让那台可用服务器
+# 永远试不到，还顺手记下 5 分钟负缓存。省下的十几秒不值得换这个风险——真正的耗时
+# 大头是 bestip 全表测速，那个已经单独规避了。
 
 
 def _probe_tdx(ip: str, port: int, timeout: float = 2.0) -> bool:
@@ -333,11 +334,6 @@ def _get_mootdx_client():
             tcp_ok_but_dead += 1
             logger.debug("mootdx %s:%s 建连成功但取不到数，换下一台", ip, port)
 
-        # 连续多台都是「端口开着、协议被拒」，说明是协议层被拦（代理/防火墙），
-        # 不是某几台服务器坏了——再往下试也是同样结果，只会让用户干等。
-        if tcp_ok_but_dead >= _MAX_PROTOCOL_FAILURES:
-            logger.debug("mootdx 连续 %d 台协议层失败，停止逐台重试", tcp_ok_but_dead)
-            break
 
     # fallback。bestip 会把 mootdx 内置主机表整个测速一遍，实测要几分钟，所以
     # **只在内置表整体连不上时才值得跑**——那才是它要解决的问题（IP 老化）。
@@ -2089,7 +2085,7 @@ def get_dragon_tiger_board(
         Formatted text with LHB appearances, top buyer/seller seats,
         and institutional activity.
     """
-    code = safe_ticker_component(ticker)
+    code = _normalize_ticker(ticker)
     end_dt = datetime.strptime(trade_date, "%Y-%m-%d")
     start_dt = end_dt - pd.Timedelta(days=look_back_days)
     start_date_str = start_dt.strftime("%Y-%m-%d")
@@ -2217,7 +2213,7 @@ def get_lockup_expiry(
         Formatted text with historical unlock records and upcoming
         expiry calendar with impact metrics.
     """
-    code = safe_ticker_component(ticker)
+    code = _normalize_ticker(ticker)
     lines = [f"# 限售解禁日历 | {code} | {trade_date}"]
 
     # 1. 历史解禁记录 — eastmoney datacenter direct HTTP
@@ -2298,7 +2294,7 @@ def get_industry_comparison(
         Formatted text with sector performance ranking, highlighting
         the sector the target stock belongs to.
     """
-    code = safe_ticker_component(ticker)
+    code = _normalize_ticker(ticker)
     lines = [f"# 行业横向对比 | {code} | {trade_date}"]
 
     # 东财 push2 行业板块排名 (direct HTTP, replaces 同花顺 which has 401)

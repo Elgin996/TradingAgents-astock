@@ -40,6 +40,22 @@ def _parse_pct(value: Optional[str]) -> Optional[float]:
         return None
 
 
+def _parse_holding_days(value) -> Optional[int]:
+    """解析持有天数。记忆日志的格式是 `5d`，不是裸数字。"""
+    if value is None:
+        return None
+    digits = "".join(ch for ch in str(value) if ch.isdigit())
+    return int(digits) if digits else None
+
+
+# 评级的方向：看多为 +1，看空为 -1，Hold 视为无方向（不参与方向正确率）。
+_RATING_DIRECTION = {
+    "Buy": 1, "Overweight": 1,
+    "Hold": 0,
+    "Underweight": -1, "Sell": -1,
+}
+
+
 @dataclass
 class DecisionRecord:
     """一条已结算的决策。"""
@@ -57,8 +73,13 @@ class GroupStats:
     """一组决策的表现。"""
 
     count: int = 0
-    win_rate: Optional[float] = None
-    alpha_win_rate: Optional[float] = None
+    # ⚠️ 命名即口径：下面两个是**标的涨跌**，不是"决策对不对"。
+    # 给出 Sell 评级后股价下跌，是判断正确，但 up_rate 会把它记成 0。
+    # 衡量判断准不准的是 direction_accuracy。
+    up_rate: Optional[float] = None
+    outperform_rate: Optional[float] = None
+    direction_accuracy: Optional[float] = None
+    directional_count: int = 0
     avg_return: Optional[float] = None
     median_return: Optional[float] = None
     avg_alpha: Optional[float] = None
@@ -68,8 +89,10 @@ class GroupStats:
     def as_dict(self) -> Dict[str, Any]:
         return {
             "count": self.count,
-            "win_rate": self.win_rate,
-            "alpha_win_rate": self.alpha_win_rate,
+            "up_rate": self.up_rate,
+            "outperform_rate": self.outperform_rate,
+            "direction_accuracy": self.direction_accuracy,
+            "directional_count": self.directional_count,
             "avg_return": self.avg_return,
             "median_return": self.median_return,
             "avg_alpha": self.avg_alpha,
@@ -83,13 +106,28 @@ def _stats(records: List[DecisionRecord]) -> GroupStats:
         return GroupStats()
     raws = [r.raw_return for r in records]
     alphas = [r.alpha_return for r in records if r.alpha_return is not None]
+
+    # 方向正确率：只统计**有方向**的评级（Hold 不表态，无所谓对错），
+    # 并按方向判定——看多要涨、看空要跌才算对。用 alpha 判（跑赢/跑输大盘），
+    # 拿不到 alpha 时退回绝对收益。
+    directional = [
+        r for r in records if _RATING_DIRECTION.get(r.rating, 0) != 0
+    ]
+    hits = sum(
+        1 for r in directional
+        if (r.alpha_return if r.alpha_return is not None else r.raw_return)
+        * _RATING_DIRECTION[r.rating] > 0
+    )
+
     return GroupStats(
         count=len(records),
-        win_rate=sum(1 for v in raws if v > 0) / len(raws),
-        # alpha 胜率单独算：A 股 beta 很强，跟着大盘涨不代表判断对。
-        alpha_win_rate=(
+        up_rate=sum(1 for v in raws if v > 0) / len(raws),
+        # A 股 beta 很强，跟着大盘涨不代表判断对，所以单独看跑赢比例。
+        outperform_rate=(
             sum(1 for v in alphas if v > 0) / len(alphas) if alphas else None
         ),
+        direction_accuracy=(hits / len(directional) if directional else None),
+        directional_count=len(directional),
         avg_return=statistics.fmean(raws),
         median_return=statistics.median(raws),
         avg_alpha=statistics.fmean(alphas) if alphas else None,
@@ -111,11 +149,9 @@ def load_records(entries: List[dict]) -> List[DecisionRecord]:
         raw = _parse_pct(e.get("raw"))
         if raw is None:
             continue
-        holding = e.get("holding")
-        try:
-            holding_days = int(str(holding).strip()) if holding else None
-        except ValueError:
-            holding_days = None
+        # 记忆日志写的是 "5d"（memory.py 的 tag 带 d 后缀），直接 int() 会抛，
+        # 于是每条的持有期都被吞成 None、平均持有期永远显示不出来。
+        holding_days = _parse_holding_days(e.get("holding"))
         records.append(
             DecisionRecord(
                 date=e.get("date", ""),
@@ -231,23 +267,29 @@ def format_report(summary: Dict[str, Any]) -> str:
     lines += [
         "",
         "## 整体",
-        f"- 胜率（绝对收益为正）：{_rate(o['win_rate'])}",
-        f"- alpha 胜率（跑赢沪深300）：{_rate(o['alpha_win_rate'])}",
+        f"- **方向正确率：{_rate(o['direction_accuracy'])}**"
+        f"（{o['directional_count']} 条有方向的评级；看多要跑赢、看空要跑输才算对）",
+        f"- 标的上涨占比：{_rate(o['up_rate'])}",
+        f"- 跑赢沪深300占比：{_rate(o['outperform_rate'])}",
         f"- 平均收益：{_pct(o['avg_return'])}　中位数：{_pct(o['median_return'])}",
         f"- 平均 alpha：{_pct(o['avg_alpha'])}",
         f"- 最好：{_pct(o['best'])}　最差：{_pct(o['worst'])}",
         "",
-        "> A 股 beta 很强，跟着大盘涨不等于判断对——**alpha 胜率比胜率更能说明问题**。",
+        "> **只有「方向正确率」衡量判断准不准。** 下面两个比率描述的是标的怎么走，"
+        "与评级方向无关：给出卖出评级后股价下跌是**判断正确**，但它不会计入"
+        "「上涨占比」。Hold 不表态，不计入方向正确率。",
+        "> A 股 beta 很强，跟着大盘涨不等于判断对，所以看 alpha 口径比看绝对收益更可靠。",
     ]
 
     if summary["by_rating"]:
-        lines += ["", "## 按评级", "", "| 评级 | 条数 | 胜率 | alpha胜率 | 平均收益 | 平均alpha |",
-                  "|---|---|---|---|---|---|"]
+        lines += ["", "## 按评级", "",
+                  "| 评级 | 条数 | 方向正确率 | 上涨占比 | 跑赢占比 | 平均收益 | 平均alpha |",
+                  "|---|---|---|---|---|---|---|"]
         for rating, g in summary["by_rating"].items():
             lines.append(
-                f"| {rating} | {g['count']} | {_rate(g['win_rate'])} | "
-                f"{_rate(g['alpha_win_rate'])} | {_pct(g['avg_return'])} | "
-                f"{_pct(g['avg_alpha'])} |"
+                f"| {rating} | {g['count']} | {_rate(g['direction_accuracy'])} | "
+                f"{_rate(g['up_rate'])} | {_rate(g['outperform_rate'])} | "
+                f"{_pct(g['avg_return'])} | {_pct(g['avg_alpha'])} |"
             )
         mono = summary["rating_monotonic"]
         if mono is True:
@@ -258,11 +300,12 @@ def format_report(summary: Dict[str, Any]) -> str:
             lines += ["", "（五档评级尚未各自积累到样本，暂不判断评级是否有区分度。）"]
 
     if summary["by_ticker"]:
-        lines += ["", "## 按标的", "", "| 代码 | 条数 | 胜率 | 平均收益 | 平均alpha |",
+        lines += ["", "## 按标的", "",
+                  "| 代码 | 条数 | 方向正确率 | 平均收益 | 平均alpha |",
                   "|---|---|---|---|---|"]
         for ticker, g in summary["by_ticker"].items():
             lines.append(
-                f"| {ticker} | {g['count']} | {_rate(g['win_rate'])} | "
+                f"| {ticker} | {g['count']} | {_rate(g['direction_accuracy'])} | "
                 f"{_pct(g['avg_return'])} | {_pct(g['avg_alpha'])} |"
             )
 
