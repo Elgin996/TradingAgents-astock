@@ -6,6 +6,30 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.13] — 2026-08-09
+
+### 修复：加粗 + 连字符仍会被判成评级（正则回溯）
+
+v0.5.12 把 markdown 收尾星号写成 `\*{0,2}(?!词字符)` —— **先消耗再判断会回溯**：
+`建议：**Sell**-off risk remains elevated` 里 `\*{0,2}` 先吃掉 `**`，被 `-` 判否后
+退一步只吃一个 `*`，剩下那个 `*` 恰好满足边界，于是又判成 Sell。正好把这条规则本来
+要挡的连字符散文放了回来。
+
+改成把星号**放进前瞻内部**（`(?!\*{0,2}词字符)`）——"后面不能是（0~2 个星号 + 词
+字符）"没有可回溯的余地。`最终评级：**Sell**` 这类正常写法不受影响。
+
+⚠️ **刻意不用占有量词 `(?>...)` / `*+`**：那是 Python 3.11+ 才有的，而本项目声明
+`requires-python = ">=3.10"`，3.10 用户会在**导入时**就 `re.error`——比逻辑 bug
+更硬的破坏。新增一条守卫用例，直接检查编译后的 pattern 里没有这些写法。
+
+覆盖矩阵扩到 25 例。
+
+### 测试
+
+365 passed / 13 skipped / **0 failed**（新增 4 例）。
+
+---
+
 ## [0.5.12] — 2026-08-09
 
 Codex 第七轮 + **两处重构**。这两块前后各被修了三轮"修了又漏"，问题不在某个字符，

@@ -69,8 +69,12 @@ _CN_LABEL_RE = re.compile(_CN_LABEL_PREFIX + r"(" + _CN_ALT + r")")
 # 现在只问一件事：紧跟其后的字符会不会让它变成另一个词？会就不算评级。
 # 中文、各种括号、标点、空白、行尾一律放行。
 _WORD_CONTINUATION = r"[A-Za-z0-9_\-]"
-# 先吃掉 markdown 的收尾星号（`最终评级：**Sell**`）
-_RATING_VALUE_END = r"\*{0,2}(?!" + _WORD_CONTINUATION + r")"
+# ⚠️ markdown 的收尾星号必须**放进前瞻内部**，不能写成 `\*{0,2}(?!...)` 先消耗再判断：
+# 那样正则会回溯——`建议：**Sell**-off risk` 里 `\*{0,2}` 先吃掉 `**` 被 `-` 判否，
+# 退一步只吃一个 `*`，剩下的 `*` 恰好满足边界，于是又判成 Sell。
+# 写成"后面不能是（0~2 个星号 + 词字符）"就没有可回溯的余地。
+# （不用占有量词 `(?>...)`：那是 Python 3.11+ 才有的，本项目声明支持 3.10。）
+_RATING_VALUE_END = r"(?!\*{0,2}" + _WORD_CONTINUATION + r")"
 
 _CN_LABEL_EN_RE = re.compile(
     _CN_LABEL_PREFIX + r"(" + "|".join(RATINGS_5_TIER) + r")" + _RATING_VALUE_END,

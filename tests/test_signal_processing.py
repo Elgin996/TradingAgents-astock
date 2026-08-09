@@ -224,6 +224,11 @@ class TestParseRatingWordBoundary:
             ("最终评级：Buy-side interest is weak", "Hold"),
             ("最终评级：Buy2024", "Hold"),                       # 数字后缀
             ("最终评级：Buy_target", "Hold"),                    # 下划线
+            # 加粗 + 连字符：`\*{0,2}` 先消耗再判断会回溯——吃掉 `**` 被 `-` 判否后
+            # 退一步只吃一个 `*`，剩下的 `*` 恰好满足边界，于是又判成 Sell（第八轮）
+            ("建议：**Sell**-off risk remains elevated", "Hold"),
+            ("最终评级：**Buy**-side interest is weak", "Hold"),
+            ("最终评级：**Buy**2024", "Hold"),
             # —— 中文评级词不受影响 ——
             ("最终评级：买入", "Buy"),
             ("最终评级：卖出", "Sell"),
@@ -232,3 +237,29 @@ class TestParseRatingWordBoundary:
     )
     def test_rating_value_boundary_matrix(self, text, expected):
         assert parse_rating(text) == expected
+
+
+@pytest.mark.unit
+def test_rating_regex_stays_python310_compatible():
+    """评级正则不能用 Python 3.11+ 才有的原子组 / 占有量词。
+
+    pyproject 声明 `requires-python = ">=3.10"`，用 `(?>...)` 或 `*+` 会让 3.10
+    用户在**导入时**就 re.error——比逻辑 bug 更硬的破坏。
+    """
+    import re
+
+    from tradingagents.agents.utils import rating
+
+    # 直接检查真正编译出来的 pattern，而不是源码文本——注释里提到这些写法是正常的
+    patterns = [
+        v.pattern for v in vars(rating).values() if isinstance(v, re.Pattern)
+    ] + [
+        v for k, v in vars(rating).items()
+        if isinstance(v, str) and k.isupper() and k.endswith(("_RE", "_END", "_PREFIX", "_CONTINUATION"))
+    ]
+    assert patterns, "没取到任何正则，用例失去意义"
+
+    for pat in patterns:
+        assert "(?>" not in pat, f"原子组是 Python 3.11+ 特性：{pat}"
+        for possessive in ("*+", "++", "?+", "}+"):
+            assert possessive not in pat, f"占有量词 {possessive} 是 Python 3.11+ 特性：{pat}"
