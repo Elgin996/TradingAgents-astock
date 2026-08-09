@@ -195,13 +195,40 @@ class TestParseRatingWordBoundary:
         assert parse_rating("最终评级：买入") == "Buy"
         assert parse_rating("最终评级：卖出") == "Sell"
 
-    def test_hyphenated_and_suffixed_prose_rejected(self):
-        """`(?![A-Za-z])` 不够——连字符和数字后缀能过关（codex 第六轮）。"""
-        assert parse_rating("建议：Sell-off risk remains elevated") == "Hold"
-        assert parse_rating("最终评级：Buy-side interest is weak") == "Hold"
-        assert parse_rating("最终评级：Buy2024") == "Hold"
-
-    def test_markdown_bold_rating_still_parses(self):
-        """收紧边界不能误伤 markdown 加粗写法。"""
-        assert parse_rating("最终评级：**Sell**") == "Sell"
-        assert parse_rating("投资建议: **增持**") == "Overweight"
+    # 「中文标签 + 英文评级词」的边界规则前后改了三轮才收敛，每一轮都是"修了又漏"：
+    #   1. 没有边界        → `Buyer interest` 判成 Buy
+    #   2. `(?![A-Za-z])`  → `Sell-off risk`、`Buy2024` 仍过关
+    #   3. 枚举收尾标点     → `Buy（基于风险收益比）` 反被误判成 Hold
+    # 最终改成「不能延续成更长的词」这条判据。**改这条规则必须整张矩阵过一遍**，
+    # 只补自己想到的那一两个用例就是上面三轮反复的成因。
+    @pytest.mark.parametrize(
+        "text,expected",
+        [
+            # —— 正常写法必须识别 ——
+            ("最终评级：Buy", "Buy"),
+            ("最终评级：Sell", "Sell"),
+            ("投资建议：Overweight", "Overweight"),
+            ("评级 - buy", "Buy"),
+            ("最终评级：**Sell**", "Sell"),            # markdown 加粗
+            ("最终评级：Buy。", "Buy"),                 # 中文句号
+            ("最终评级：Sell，理由如下", "Sell"),        # 中文逗号
+            ("最终评级：Buy：核心逻辑", "Buy"),          # 中文冒号
+            ("最终评级：Buy（基于风险收益比）", "Buy"),   # 全角括号（第七轮）
+            ("最终评级：Underweight(估值偏高)", "Underweight"),  # 半角括号（第七轮）
+            ("最终评级：Hold【中性】", "Hold"),
+            ("最终评级：Sell\n理由若干", "Sell"),       # 换行
+            # —— 英文散文必须被拒（落回默认 Hold）——
+            ("最终评级：Buyer interest remains weak", "Hold"),
+            ("建议：Selling pressure is high", "Hold"),
+            ("建议：Sell-off risk remains elevated", "Hold"),   # 连字符
+            ("最终评级：Buy-side interest is weak", "Hold"),
+            ("最终评级：Buy2024", "Hold"),                       # 数字后缀
+            ("最终评级：Buy_target", "Hold"),                    # 下划线
+            # —— 中文评级词不受影响 ——
+            ("最终评级：买入", "Buy"),
+            ("最终评级：卖出", "Sell"),
+            ("投资建议: **增持**", "Overweight"),
+        ],
+    )
+    def test_rating_value_boundary_matrix(self, text, expected):
+        assert parse_rating(text) == expected

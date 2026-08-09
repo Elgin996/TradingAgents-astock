@@ -290,3 +290,54 @@ def test_probing_restores_mootdx_bestip_when_nothing_works(handshake_fails, monk
         "快照到空值的话'还原'反而会把用户真实配置抹掉"
     )
     assert store["BESTIP"] == original, "全部探测失败后应把 BESTIP 还原成原样"
+
+
+def test_bestip_kept_when_a_server_works(fake_tdx, monkeypatch):
+    """选出可用服务器时**不能**还原——那次覆写正是我们想要的结果。"""
+    from mootdx import config as mootdx_config
+
+    store = {"BESTIP": {"HQ": "", "EX": "", "GP": ""}}
+    persisted = {"HQ": ["1.2.3.4", 7709], "EX": "", "GP": ""}
+    monkeypatch.setattr(mootdx_config, "setup", lambda: store.__setitem__("BESTIP", dict(persisted)))
+    monkeypatch.setattr(mootdx_config, "get", lambda k: store.get(k))
+    monkeypatch.setattr(mootdx_config, "set", lambda k, v: store.__setitem__(k, v))
+
+    fake_tdx["protocol_ok"] = {"2.2.2.2"}
+    # 模拟 mootdx：建 client 时写 BESTIP
+    original_factory = None
+    import mootdx.quotes as mq
+    real = mq.Quotes.factory
+
+    class Wrapped:
+        @staticmethod
+        def factory(market="std", server=None, **kw):
+            if server:
+                store["BESTIP"] = {"HQ": list(server), "EX": "", "GP": ""}
+            return real(market=market, server=server, **kw)
+
+    monkeypatch.setattr(mq, "Quotes", Wrapped)
+
+    client = a_stock._get_mootdx_client()
+
+    assert client.ip == "2.2.2.2"
+    assert store["BESTIP"]["HQ"] == ["2.2.2.2", 7709], (
+        "选中的服务器应当留在配置里，而不是被还原掉"
+    )
+
+
+def test_bestip_restored_even_if_probing_raises(handshake_fails, monkeypatch):
+    """探测中途抛异常也要还原——手动调还原函数时这条路径最容易漏。"""
+    from mootdx import config as mootdx_config
+
+    persisted = {"HQ": ["1.2.3.4", 7709], "EX": "", "GP": ""}
+    store = {"BESTIP": {"HQ": "", "EX": "", "GP": ""}}
+    monkeypatch.setattr(mootdx_config, "setup", lambda: store.__setitem__("BESTIP", dict(persisted)))
+    monkeypatch.setattr(mootdx_config, "get", lambda k: store.get(k))
+    monkeypatch.setattr(mootdx_config, "set", lambda k, v: store.__setitem__(k, v))
+    monkeypatch.setattr(a_stock, "_reachable_tdx_servers",
+                        lambda servers, timeout=2.0: (_ for _ in ()).throw(RuntimeError("boom")))
+
+    with pytest.raises(RuntimeError, match="boom"):
+        a_stock._get_mootdx_client()
+
+    assert store["BESTIP"] == persisted, "异常路径也必须还原"

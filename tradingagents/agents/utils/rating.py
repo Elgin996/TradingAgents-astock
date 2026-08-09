@@ -59,14 +59,18 @@ _CN_LABEL_RE = re.compile(_CN_LABEL_PREFIX + r"(" + _CN_ALT + r")")
 # 英文标签规则要求出现 "rating"；中文标签规则只认中文评级词；裸英文词扫描按
 # 空白切分，"最终评级：Buy" 是**一个** token，`strip("*:.,")` 又剥不掉全角冒号。
 # 结果是静默落到默认值 Hold —— 决策评级被悄悄改写，报告里完全看不出来。
-# 评级词后面必须是**真正的结束**：行尾、空白、或中文/常见标点。
+# 评级词后面**不能延续成更长的词**。
 #
-# ⚠️ 只排除下一个字母（`(?![A-Za-z])`）是不够的——`建议：Sell-off risk remains elevated`
-# 和 `最终评级：Buy-side interest is weak` 里连字符能过关，照样被判成 Sell / Buy；
-# `最终评级：Buy2024` 同理。而这些恰恰就是本规则要挡的"标签后跟英文散文"。
-# 这类误判会被写进记忆日志，再污染决策绩效统计，报告里完全看不出来。
-# 先吃掉 markdown 的收尾星号（`最终评级：**Sell**`），再要求真正的结束。
-_RATING_VALUE_END = r"\*{0,2}(?=$|[\s，。；、！？,.;!?)\]}」』】》]|[\u4e00-\u9fff])"
+# 判据刻意选"否定词字符"而不是"枚举允许的标点"——后者是个填不完的坑，这条规则
+# 前后被修了三轮才收敛：
+#   · `(?![A-Za-z])`  漏掉连字符与数字：`Sell-off risk`→Sell、`Buy2024`→Buy
+#   · 枚举收尾标点     漏掉开引号：`Buy（基于风险收益比）`、`Underweight(估值偏高)`
+#     被判成 Hold —— 而静默改写决策评级会一路污染记忆日志与绩效统计
+# 现在只问一件事：紧跟其后的字符会不会让它变成另一个词？会就不算评级。
+# 中文、各种括号、标点、空白、行尾一律放行。
+_WORD_CONTINUATION = r"[A-Za-z0-9_\-]"
+# 先吃掉 markdown 的收尾星号（`最终评级：**Sell**`）
+_RATING_VALUE_END = r"\*{0,2}(?!" + _WORD_CONTINUATION + r")"
 
 _CN_LABEL_EN_RE = re.compile(
     _CN_LABEL_PREFIX + r"(" + "|".join(RATINGS_5_TIER) + r")" + _RATING_VALUE_END,

@@ -17,6 +17,7 @@ from __future__ import annotations
 from typing import Annotated
 from datetime import date, datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
+import contextlib
 import json as _json
 import os
 import logging
@@ -338,6 +339,48 @@ def reset_mootdx_client() -> None:
     _mootdx_unavailable_until = 0.0
 
 
+@contextlib.contextmanager
+def _preserve_mootdx_bestip():
+    """探测期间保护 mootdx 的持久化服务器配置，退出时按需还原。
+
+    `StdQuotes.__init__` 里有 `config.set('BESTIP', {'HQ': self.server})`——**每建一次
+    带 server 的 client 都会写进 mootdx 的配置文件**。逐台探测 38 个候选就等于把用户
+    原本配好的服务器一路覆写，最后留下的是最后一台**失败的**服务器，还会连累同一台
+    机器上其它用 mootdx 的程序。
+
+    🔴 必须先 `setup()` 再快照：新进程里 `config.get("BESTIP")` 返回的是模块默认空值，
+    用户持久化的值要等 `BaseQuotes.__init__` 调 `setup()` 才读进来。快照到空值的话，
+    "还原"反而会把真实配置抹成空——比不还原更糟。
+    实测（mootdx 0.11.7）：setup 前 `{'HQ': ''}`，setup 后 `{'HQ': ['218.6.x.x', 7709]}`。
+
+    用法：`with _preserve_mootdx_bestip() as keep:` —— 选出可用服务器时调 `keep()`
+    表示"这次的覆写是我们想要的，别还原"；不调就在退出时还原。
+
+    ⚠️ **做成上下文管理器而不是手动调还原函数**：此前是在两处分别调 `_restore_bestip()`，
+    再加一条提前返回就会漏掉一处，而漏掉的后果是静默留下一台死服务器。
+    """
+    saved = None
+    try:
+        from mootdx import config as _cfg
+        _cfg.setup()
+        saved = _cfg.get("BESTIP")
+        if isinstance(saved, dict):
+            saved = dict(saved)
+    except Exception as e:  # 版本差异导致取不到就跳过保护，别影响主流程
+        logger.debug("读取 mootdx BESTIP 失败，本次探测不做保护：%s", e)
+
+    keep = {"flag": False}
+    try:
+        yield lambda: keep.__setitem__("flag", True)
+    finally:
+        if saved is not None and not keep["flag"]:
+            try:
+                from mootdx import config as _cfg2
+                _cfg2.set("BESTIP", saved)
+            except Exception as e:
+                logger.debug("恢复 mootdx BESTIP 失败：%s", e)
+
+
 def _get_mootdx_client():
     """Lazy-init 健壮版 mootdx Quotes client（TCP 连接，可复用）。
 
@@ -362,80 +405,48 @@ def _get_mootdx_client():
 
     from mootdx.quotes import Quotes
 
-    # ⚠️ mootdx 的 `StdQuotes.__init__` 里有 `config.set('BESTIP', {'HQ': self.server})`
-    # ——每建一次带 server 的 client 都会**持久化写入它的配置文件**。逐台探测 38 个候选
-    # 就等于把用户原本配好的服务器一路覆写掉，最后留在配置里的是最后一台**失败的**
-    # 服务器；下面的裸 factory 兜底（它读 BESTIP）也就再也救不回来，还会连累同一台
-    # 机器上其它用 mootdx 的程序。所以探测前先快照，选不出可用服务器时原样还回去。
-    saved_bestip = None
-    try:
-        from mootdx import config as _mootdx_config
-        # 🔴 必须先 setup() 再快照：新进程里 `config.get("BESTIP")` 返回的是模块默认
-        # 空值，用户持久化的服务器要等 `BaseQuotes.__init__` 调 setup() 才被读进来。
-        # 快照到空值的话，"还原"反而会把用户真实配置抹成空——比不还原更糟。
-        # 实测（mootdx 0.11.7）：setup 前 {'HQ': ''}，setup 后 {'HQ': ['218.6.x.x', 7709]}。
-        _mootdx_config.setup()
-        saved_bestip = _mootdx_config.get("BESTIP")
-        if isinstance(saved_bestip, dict):
-            saved_bestip = dict(saved_bestip)
-    except Exception as e:  # 版本差异导致取不到就跳过恢复，别影响主流程
-        logger.debug("读取 mootdx BESTIP 失败，探测后不做恢复：%s", e)
-
-    def _restore_bestip():
-        if saved_bestip is None:
-            return
-        try:
-            from mootdx import config as _cfg
-            _cfg.set("BESTIP", saved_bestip)
-        except Exception as e:
-            logger.debug("恢复 mootdx BESTIP 失败：%s", e)
-
-    # TCP 预筛并发跑：38 台里多数是"连都连不上"，串行每台要等满超时（实测整轮
-    # 73.7s，首次调用像卡死）。预筛纯粹是等 IO，并发不改变选取语义——下面仍按
-    # 原顺序、逐台做真实取数验证，精选表依旧优先。
-    reachable = _reachable_tdx_servers(_candidate_tdx_servers())
-
     tcp_ok_but_dead = 0
-    for ip, port in reachable:
-        # 「TCP 通但通达信协议不通」有两种表现：factory 建连时握手就被拒，
-        # 或者建出来了但取不到数。**两种都要算**——只统计后者的话，计数永远是 0
-        # （实测这批服务器全是在 factory 里抛 ConnectionReset），下面的快速失败
-        # 判断就失效了。
-        try:
-            candidate = Quotes.factory(market="std", server=(ip, port))
-        except Exception as e:
-            tcp_ok_but_dead += 1
-            logger.debug("mootdx %s:%s 握手失败（%s），换下一台", ip, port, type(e).__name__)
-        else:
-            if _tdx_client_works(candidate):
-                logger.info("mootdx server selected: %s:%s", ip, port)
-                _mootdx_client = candidate
-                return _mootdx_client
-            tcp_ok_but_dead += 1
-            logger.debug("mootdx %s:%s 建连成功但取不到数，换下一台", ip, port)
+    # 探测会覆写 mootdx 的持久化配置——包在这里，只有真选出可用服务器时才 keep()，
+    # 其余每条退出路径（含异常）都自动还原。
+    with _preserve_mootdx_bestip() as keep_bestip:
+        # TCP 预筛并发跑：38 台里多数是"连都连不上"，串行每台要等满超时（实测整轮
+        # 73.7s，首次调用像卡死）。预筛纯粹是等 IO，并发不改变选取语义——下面仍按
+        # 原顺序、逐台做真实取数验证，精选表依旧优先。
+        reachable = _reachable_tdx_servers(_candidate_tdx_servers())
 
+        for ip, port in reachable:
+            # 「TCP 通但通达信协议不通」有两种表现：factory 建连时握手就被拒，
+            # 或者建出来了但取不到数。**两种都要算**——只统计后者的话，计数永远是 0
+            # （实测这批服务器全是在 factory 里抛 ConnectionReset），下面的快速失败
+            # 判断就失效了。
+            try:
+                candidate = Quotes.factory(market="std", server=(ip, port))
+            except Exception as e:
+                tcp_ok_but_dead += 1
+                logger.debug("mootdx %s:%s 握手失败（%s），换下一台", ip, port, type(e).__name__)
+            else:
+                if _tdx_client_works(candidate):
+                    logger.info("mootdx server selected: %s:%s", ip, port)
+                    keep_bestip()   # 这次的覆写正是我们想要的，别还原
+                    _mootdx_client = candidate
+                    return _mootdx_client
+                tcp_ok_but_dead += 1
+                logger.debug("mootdx %s:%s 建连成功但取不到数，换下一台", ip, port)
 
-    # 裸 factory 读的就是 BESTIP，而上面的逐台探测已经把它覆写了——必须先还原成
-    # 用户原本配置的那台，这个兜底才有意义。
-    _restore_bestip()
-
-    # 最后再试一次裸 factory（老用户的 mootdx config 里可能已存了可用 IP）。
+    # 走到这里说明逐台探测都没成——上面的 with 已经把 BESTIP 还原成用户原本的配置，
+    # 下面的裸 factory 读的正是它，这个兜底才有意义。
     # ⚠️ 刻意**不用** `bestip=True`：它会把整张主机表做一遍测速，实测要几分钟。
-    # 上面 `_candidate_tdx_servers()` 已经把 mootdx 自带的完整主机表逐台验证过了，
+    # `_candidate_tdx_servers()` 已经把 mootdx 自带的完整主机表逐台验证过了，
     # 覆盖面不比 bestip 差，而且每台都是"真取到数才算通过"。
-    for kwargs in ({},):
-        try:
-            candidate = Quotes.factory(market="std", **kwargs)
-        except Exception as e:
-            logger.debug("mootdx factory(%s) failed — %s", kwargs, e)
-            continue
+    try:
+        candidate = Quotes.factory(market="std")
+    except Exception as e:
+        logger.debug("mootdx 裸 factory 失败 — %s", e)
+    else:
         if _tdx_client_works(candidate):
-            logger.info("mootdx client from factory(%s)", kwargs)
+            logger.info("mootdx client from 裸 factory（用户已有配置）")
             _mootdx_client = candidate
             return _mootdx_client
-
-    # 一台都没选出来：把 BESTIP 还原成探测前的样子，别留下一台死服务器
-    _restore_bestip()
 
     _mootdx_unavailable_until = time.time() + _MOOTDX_RETRY_AFTER_S
     if tcp_ok_but_dead:
