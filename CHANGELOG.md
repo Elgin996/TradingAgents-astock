@@ -6,6 +6,49 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Breaking changes within the 0.x line are called out explicitly.
 
+## [0.5.9] — 2026-08-09
+
+### 🔴 修复：裸跑 `tradingagents` 被 v0.5.2 打断（升级即破坏）
+
+Typer 在只注册一个命令时用「单命令模式」，裸跑就等于跑那个命令。v0.5.2 加了
+`performance` 子命令后它切换成「命令组模式」，于是：
+
+```
+$ tradingagents
+Usage: tradingagents [OPTIONS] COMMAND [ARGS]...
+╭─ Error ─────────────────╮
+│ Missing command.        │
+╰─────────────────────────╯
+```
+
+而 README 和所有文档写的都是裸跑 —— **每个现有用户升级后的第一条命令都会失败**。
+已加 `@app.callback(invoke_without_command=True)` 保住这条默认路径，`--checkpoint`
+等原有参数照常可用。新增 4 例测试，其中一例专门断言那段注释里写着后果——这个
+callback 很容易在重构时被当成多余代码删掉。
+
+### 修复：「今天」按主机时区算，海外用户会误判
+
+`_is_historical()` 用 `datetime.now().date()`（主机本地日期）。主机在 UTC+9 以东
+（如新西兰 UTC+13）时，当地已过零点而上海还在前一天 —— **当天的分析会被判成
+「复盘历史」**：实时分钟资金流被整段略去，快照工具打出莫须有的未来函数警告。
+反过来主机在西半球也会把已经过去的交易日当成"今天"。
+
+改为固定按 A 股市场时区（Asia/Shanghai）计算，与主机时区无关。资金流回溯窗口的
+天数差也一并改用市场日期。
+
+### 修复：README 的指标口径与实际输出不符
+
+v0.5.6 已把指标改名为 `direction_accuracy` / `up_rate` / `outperform_rate`，但
+README 仍写着「胜率 / alpha 胜率」—— **而这正是 v0.5.6 要纠正的误导**：对看空评级
+而言，"胜率"描述的是标的涨没涨，不是判断对不对。中英文 README 已同步为实际指标名，
+并写明三者的区别与各自的样本量口径。
+
+### 测试
+
+334 passed / 13 skipped / **0 failed**（新增 5 例）。
+
+---
+
 ## [0.5.8] — 2026-08-09
 
 Codex **终轮**审计的四处。前三轮修的东西里，有两处"看着修好了、实际没生效"。

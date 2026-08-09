@@ -15,7 +15,7 @@ Data sources:
 from __future__ import annotations
 
 from typing import Annotated
-from datetime import datetime
+from datetime import date, datetime, timedelta, timezone
 from dateutil.relativedelta import relativedelta
 import json as _json
 import os
@@ -197,14 +197,26 @@ def resolve_ticker(user_input: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+# A 股市场时区。判"今天"必须按市场所在地算，不能用主机本地时区——
+# 主机在 UTC+9 以东（如新西兰 UTC+13）时，当地已过零点而上海还在前一天，
+# 当天的分析会被判成"复盘历史"：实时资金流被略去、快照工具打出莫须有的未来函数
+# 警告。反过来主机在西半球也会把已经过去的交易日当成"今天"。
+_MARKET_TZ = timezone(timedelta(hours=8))
+
+
+def _market_today() -> "date":
+    """A 股市场当前日期（Asia/Shanghai），与主机时区无关。"""
+    return datetime.now(_MARKET_TZ).date()
+
+
 def _is_historical(curr_date) -> bool:
-    """分析日期是否早于今天。早于今天 = 这次是在复盘历史，不能拿实时数据当事实。"""
+    """分析日期是否早于市场当天。早于 = 这次是在复盘历史，不能拿实时数据当事实。"""
     if not curr_date:
         return False
     try:
         return (
             datetime.strptime(str(curr_date)[:10], "%Y-%m-%d").date()
-            < datetime.now().date()
+            < _market_today()
         )
     except ValueError:
         return False
@@ -2064,8 +2076,8 @@ def get_fund_flow(
             # 覆盖到那一段（上限 500，够回溯约两年）。
             hist_limit = 20
             if historical:
-                gap_days = (datetime.now() - datetime.strptime(
-                    str(curr_date)[:10], "%Y-%m-%d")).days
+                gap_days = (_market_today() - datetime.strptime(
+                    str(curr_date)[:10], "%Y-%m-%d").date()).days
                 # 日历日 → 交易日约 ×0.7，再多留 20 天余量
                 hist_limit = min(500, 20 + int(gap_days * 0.7) + 20)
             params_hist = {

@@ -252,3 +252,27 @@ def test_fund_flow_history_trimmed_to_twenty_rows(monkeypatch):
 
     kept = [ln for ln in out.splitlines() if ln.strip().startswith("2026-")]
     assert len(kept) == 20, f"应裁到 20 行，实际 {len(kept)} 行"
+
+
+def test_is_historical_uses_market_timezone_not_host(monkeypatch):
+    """"今天"必须按 A 股市场时区算，不能用主机本地时区（codex 第四轮）。
+
+    主机在 UTC+9 以东（如新西兰 UTC+13）时，当地已过零点而上海还在前一天——
+    当天的分析会被判成"复盘历史"，实时资金流被略去、快照工具打出莫须有的
+    未来函数警告。
+    """
+    from datetime import datetime as _dt, timedelta as _td, timezone as _tz
+
+    class FakeDatetime(_dt):
+        @classmethod
+        def now(cls, tz=None):
+            # 奥克兰已是 8-10 凌晨，上海仍是 8-09 晚间
+            aware = _dt(2026, 8, 9, 23, 30, tzinfo=_tz(_td(hours=8)))
+            return aware.astimezone(tz) if tz else aware.astimezone(_tz(_td(hours=13))).replace(tzinfo=None)
+
+    monkeypatch.setattr(a_stock, "datetime", FakeDatetime)
+
+    assert a_stock._market_today().isoformat() == "2026-08-09"
+    # 市场当天不该被判成历史，哪怕主机日历已经翻页
+    assert a_stock._is_historical("2026-08-09") is False
+    assert a_stock._is_historical("2026-08-08") is True

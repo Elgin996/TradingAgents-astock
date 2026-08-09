@@ -247,12 +247,15 @@ tradingagents performance --json     # Machine-readable JSON
 
 The data comes from the memory log: every analysis records a decision, and the next analysis of the same ticker resolves it by fetching real prices and filling in the return and the alpha (against CSI 300). **The report itself makes zero LLM calls** — it only reads results already on disk.
 
-It covers overall win rate / alpha win rate / average return, a breakdown by rating and by ticker, and a **rating-discrimination check**: across the five tiers from Buy to Sell, does average alpha actually decrease monotonically? A non-monotonic result means the ratings carry no real discriminating power, which tells you far more than the win rate alone.
+The headline metric is **`direction_accuracy`** — **the only one that measures whether the calls were right**: a bullish rating must outperform and a bearish one must underperform; Hold takes no position and is excluded. It also reports `up_rate` (how often the instrument rose) and `outperform_rate` (how often it beat CSI 300); **those two describe the instrument, not the decision** — a Sell followed by a decline is a *correct* call, yet it does not count toward `up_rate`.
+
+Plus breakdowns by rating and by ticker, and a **rating-discrimination check**: across the five tiers from Buy to Sell, does average alpha actually decrease monotonically? A non-monotonic result means the ratings carry no real discriminating power.
 
 Important caveats:
 
 - **This is not a backtest, and not strategy performance.** Each record is "how one judgement made on one day looked after a fixed holding window": the windows overlap, there is no position sizing, no transaction or impact costs, and the sample may be selection-biased.
-- **A-share beta is strong** — rising with the index is not the same as being right, so **the alpha win rate matters more than the raw win rate**.
+- **A-share beta is strong** — rising with the index is not the same as being right, so direction accuracy is judged on alpha; raw return would overstate skill.
+- **Significance is counted per metric**: direction accuracy only uses directional ratings, so when the resolved total is large enough but the directional count is under 20, the report flags that metric separately.
 - **Below 20 resolved records the report says so itself** ("these ratios are mostly noise"). Do not draw conclusions from a handful of entries.
 - Records whose return cannot be parsed are **skipped, not counted as 0%** — counting them would quietly drag every statistic toward neutral.
 
