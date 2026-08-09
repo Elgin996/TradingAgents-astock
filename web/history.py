@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import tempfile
 import threading
@@ -12,6 +13,8 @@ from typing import Any
 
 from tradingagents.default_config import DEFAULT_CONFIG
 
+
+logger = logging.getLogger(__name__)
 
 _INCOMPLETE_TASKS_FILE = Path.home() / ".tradingagents" / "incomplete_tasks.json"
 _INCOMPLETE_TASKS_LOCK = threading.Lock()
@@ -117,12 +120,17 @@ def _save_incomplete_index(entries: list[dict[str, Any]]) -> None:
         except OSError:
             raise
 
-    # 重试耗尽仍被占用：直接覆写（非原子但可接受）；仍失败则静默忽略，
-    # 索引缺失不致命，读取端容错，下次写入会自动重建。
+    # 重试耗尽仍被占用：直接覆写（非原子但可接受）。
     try:
         _INCOMPLETE_TASKS_FILE.write_text(payload, encoding="utf-8")
-    except OSError:
-        pass
+    except OSError as e:
+        # 索引写不进去不致命——读取端容错、下次写入会自动重建，所以不往上抛。
+        # 但**不能一声不吭**：完全静默的话，用户永远不会知道它一直在失败，
+        # 「未完成任务」列表长期不更新时也无从排查。
+        logger.warning(
+            "写入未完成任务索引失败（已重试并降级为直接覆写）：%s。"
+            "不影响本次分析，但侧边栏的未完成任务列表可能不是最新的。", e
+        )
 
 
 def _checkpoint_step(ticker: str, trade_date: str) -> int | None:
