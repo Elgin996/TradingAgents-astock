@@ -22,13 +22,13 @@ def _record() -> FundMasterRecord:
     )
 
 
-def test_profile_requires_provider_qualified_tracking_index_code():
-    try:
-        profile_from_fund_master(_record())
-    except ValueError as exc:
-        assert "跟踪指数代码" in str(exc)
-    else:
-        raise AssertionError("missing tracking-index code must block ETF profile")
+def test_profile_allows_missing_tracking_index_code():
+    profile = profile_from_fund_master(_record()).to_dict()
+
+    assert profile["security_type"] == "etf"
+    assert profile["tracking_index_name"] == "沪深300"
+    assert profile["tracking_index_code"] is None
+    assert "price_history" in resolve_analysis_capabilities(profile, "etf")
 
 
 def test_user_index_code_creates_auditable_etf_profile():

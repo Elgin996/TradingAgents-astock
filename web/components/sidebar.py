@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any
 
 import streamlit as st
@@ -132,44 +132,9 @@ def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, 
         return "unknown", None, f"证券主数据暂不可用，请重试：{exc}"
 
     if record.classification == "domestic_equity_etf":
-        from tradingagents.dataflows.instrument import (
-            derive_price_limit_pct,
-            profile_from_fund_master,
-        )
+        from tradingagents.dataflows.instrument import profile_from_fund_master
 
-        # Catalog-backed codes freeze immediately into the InstrumentProfile
-        # shape. Missing codes stay as a lightweight recognition dict until the
-        # user supplies provider-qualified identifiers.
-        if record.tracking_index_code and record.tracking_index_provider:
-            return "etf", profile_from_fund_master(record).to_dict(), None
-
-        price_limit = derive_price_limit_pct(
-            symbol=record.symbol,
-            fund_name=record.fund_name,
-            tracking_index_name=record.tracking_index_name,
-        ).to_dict()
-        return (
-            "etf",
-            {
-                "symbol": record.symbol,
-                "exchange": record.exchange,
-                "security_type": "etf",
-                "etf_asset_type": "domestic_equity",
-                "fund_name": record.fund_name,
-                "tracking_index_name": record.tracking_index_name,
-                "tracking_index_code": record.tracking_index_code,
-                "tracking_index_provider": record.tracking_index_provider,
-                "tracking_index_code_status": record.tracking_index_code_source,
-                "fund_manager": record.fund_manager,
-                "listed_or_established_date": record.listed_or_established_date,
-                "management_fee": record.management_fee,
-                "custodian_fee": record.custodian_fee,
-                "price_limit_pct": price_limit,
-                "profile_as_of": datetime.now(timezone.utc).date().isoformat(),
-                "source": "mootdx securities master + Eastmoney fund profile",
-            },
-            None,
-        )
+        return "etf", profile_from_fund_master(record).to_dict(), None
     if record.classification == "unsupported_fund":
         return "unsupported", None, f"当前版本不支持该类型：{record.classification_reason}"
     # "not_a_fund": the Eastmoney fund-profile page returned placeholder
@@ -181,14 +146,14 @@ def _apply_user_tracking_index(
     profile: dict[str, Any],
     *,
     code: str,
-    provider: str,
 ) -> tuple[dict[str, Any] | None, str | None]:
-    """Freeze a user-confirmed index identifier into an ETF profile."""
+    """Freeze a user-confirmed index code and infer its publisher."""
+    from tradingagents.dataflows.index_catalog import infer_tracking_index_provider
     from tradingagents.dataflows.security_master import (
         FundMasterRecord,
         with_user_supplied_tracking_index_code,
     )
-    from tradingagents.dataflows.instrument import profile_from_fund_master
+    from tradingagents.dataflows.instrument import DataPoint, utc_now
 
     try:
         record = FundMasterRecord(
@@ -197,12 +162,15 @@ def _apply_user_tracking_index(
             fund_name=profile["fund_name"],
             fund_type="指数型-股票",
             tracking_index_name=profile["tracking_index_name"],
-            fund_manager=profile.get("fund_manager"),
-            listed_or_established_date=profile.get("listed_or_established_date"),
-            management_fee=profile.get("management_fee"),
-            custodian_fee=profile.get("custodian_fee"),
+            fund_manager=None,
+            listed_or_established_date=None,
+            management_fee=None,
+            custodian_fee=None,
             classification="domestic_equity_etf",
             classification_reason="已由证券主数据确认",
+        )
+        provider = infer_tracking_index_provider(
+            code, profile.get("tracking_index_name")
         )
         updated = with_user_supplied_tracking_index_code(
             record, code=code, provider=provider
@@ -210,7 +178,19 @@ def _apply_user_tracking_index(
     except (KeyError, ValueError) as exc:
         return None, str(exc)
 
-    frozen = profile_from_fund_master(updated).to_dict()
+    frozen = dict(profile)
+    frozen["tracking_index_code"] = DataPoint(
+        value={
+            "code": updated.tracking_index_code,
+            "provider": updated.tracking_index_provider,
+        },
+        unit=None,
+        as_of=None,
+        retrieved_at=utc_now(),
+        source="user",
+        status="ok",
+        notes="user_supplied",
+    ).to_dict()
     return frozen, None
 
 
@@ -467,12 +447,6 @@ def render_sidebar() -> None:
         """
         <div style="text-align:center; margin-bottom:1.5rem;">
             <span style="font-size:2rem; font-weight:800; color:#ff5a1f;">Trading</span><span style="font-size:2rem; font-weight:800; color:#f5f1eb;">Agents</span><span style="font-size:2rem; font-weight:800; color:#f5f1eb;">-</span><span style="font-size:2rem; font-weight:800; color:#ff5a1f;">Astock</span>
-            <div style="font-size:0.85rem; color:#888; margin-top:0.2rem;">
-                A股个股与ETF多Agent投研系统
-            </div>
-            <div style="font-size:0.7rem; color:#555; margin-top:0.3rem;">
-                by <a href="https://github.com/simonlin1212" style="color:#ff5a1f; text-decoration:none;">simonlin1212</a>
-            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -549,23 +523,17 @@ def render_sidebar() -> None:
             instrument_profile
         )
         if index_code is None:
-            st.caption("该基金资料未提供指数代码，请在开始前填写并确认来源。")
-            code_col, provider_col = st.columns(2)
-            user_index_code = code_col.text_input(
-                "跟踪指数代码",
+            st.caption("指数代码未提供（可选）；不填写也可分析 ETF 自身数据。")
+            user_index_code = st.text_input(
+                "跟踪指数代码（可选）",
                 key="etf_tracking_index_code",
                 placeholder="例: 000300",
+                help="仅在数据源支持该代码时用于指数行情对比；不影响 ETF 自身分析。",
             )
-            user_index_provider = provider_col.text_input(
-                "指数供应方",
-                key="etf_tracking_index_provider",
-                placeholder="例: CSI",
-            )
-            if user_index_code or user_index_provider:
+            if user_index_code:
                 instrument_profile, instrument_error = _apply_user_tracking_index(
                     instrument_profile,
                     code=user_index_code,
-                    provider=user_index_provider,
                 )
                 if instrument_error:
                     st.caption(f"❌ {instrument_error}")
@@ -590,11 +558,6 @@ def render_sidebar() -> None:
         or analysis_mode == "unsupported"
         or analysis_mode == "unknown"
         or (analysis_mode == "etf" and instrument_profile is None)
-        or (
-            analysis_mode == "etf"
-            and instrument_profile is not None
-            and _tracking_index_display(instrument_profile)[0] is None
-        )
     )
 
     if st.button(

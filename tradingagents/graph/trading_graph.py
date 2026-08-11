@@ -723,7 +723,9 @@ class TradingAgentsGraph:
     ):
         """Execute the graph and write the resulting state to disk and memory log."""
         from tradingagents.dataflows.capability_guard import (
+            reset_active_analysis_date,
             reset_active_capabilities,
+            set_active_analysis_date,
             set_active_capabilities,
         )
 
@@ -736,6 +738,7 @@ class TradingAgentsGraph:
         token = set_active_capabilities(
             self.analysis_capabilities if analysis_mode == "etf" else None
         )
+        date_token = set_active_analysis_date(str(trade_date))
 
         try:
             if self.debug:
@@ -761,6 +764,7 @@ class TradingAgentsGraph:
             return final_state, signal
         finally:
             self.close_graph_run()
+            reset_active_analysis_date(date_token)
             reset_active_capabilities(token)
 
     def _log_state(self, trade_date, final_state):
@@ -781,6 +785,10 @@ class TradingAgentsGraph:
             "report_schema_version": final_state.get(
                 "report_schema_version",
                 "etf-v1.3" if self.analysis_mode == "etf" else "stock-v1",
+            ),
+            "data_quality_summary": final_state.get("data_quality_summary", ""),
+            "data_quality_failed": bool(
+                final_state.get("data_quality_failed", False)
             ),
             "instrument_profile": final_state.get(
                 "instrument_profile", self.instrument_profile

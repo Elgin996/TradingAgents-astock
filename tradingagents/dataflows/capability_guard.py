@@ -17,6 +17,9 @@ class CapabilityError(RuntimeError):
 _active_capabilities: ContextVar[frozenset[str] | None] = ContextVar(
     "active_analysis_capabilities", default=None
 )
+_active_analysis_date: ContextVar[str | None] = ContextVar(
+    "active_analysis_date", default=None
+)
 
 TOOL_CAPABILITIES: dict[str, str] = {
     "get_stock_data": "price_history",
@@ -55,6 +58,20 @@ def set_active_capabilities(capabilities: Iterable[str] | None):
 
 def reset_active_capabilities(token) -> None:
     _active_capabilities.reset(token)
+
+
+def set_active_analysis_date(trade_date: str | None):
+    """Bind the authoritative date for model-invoked data tools."""
+    return _active_analysis_date.set(str(trade_date) if trade_date else None)
+
+
+def reset_active_analysis_date(token) -> None:
+    _active_analysis_date.reset(token)
+
+
+def analysis_date_for_tool(requested_date: str | None) -> str | None:
+    """Prefer the graph's fixed date over a date supplied by the model."""
+    return _active_analysis_date.get() or requested_date
 
 
 def active_capabilities() -> frozenset[str] | None:

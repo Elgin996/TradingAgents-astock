@@ -5,6 +5,11 @@ from datetime import datetime, timezone
 
 from tradingagents.dataflows import a_stock, etf_data
 from tradingagents.dataflows.alpha_vantage_fundamentals import _filter_reports_by_date
+from tradingagents.dataflows.capability_guard import (
+    analysis_date_for_tool,
+    reset_active_analysis_date,
+    set_active_analysis_date,
+)
 
 _TODAY = datetime.now(timezone.utc).strftime("%Y-%m-%d")
 _PAST = "2020-01-01"
@@ -119,6 +124,22 @@ def test_etf_peer_comparison_rejects_past_trade_date_with_no_numeric_values(monk
     assert point["value"] is None
 
 
+def test_etf_snapshot_tools_reject_missing_analysis_date():
+    payload = json.loads(etf_data.get_etf_quote("510300"))
+    point = payload["quote"]
+    assert point["status"] == "unsupported"
+    assert point["value"] is None
+
+
+def test_graph_analysis_date_overrides_model_supplied_date():
+    token = set_active_analysis_date(_PAST)
+    try:
+        assert analysis_date_for_tool(_TODAY) == _PAST
+    finally:
+        reset_active_analysis_date(token)
+    assert analysis_date_for_tool(_TODAY) == _TODAY
+
+
 def test_etf_snapshot_tools_unaffected_for_today_or_future_date(monkeypatch):
     monkeypatch.setattr(
         etf_data, "_tencent_quote", lambda codes: {codes[0]: {"price": 1.5, "turnover_pct": 1.0}}
@@ -149,6 +170,7 @@ def test_probe_etf_capabilities_includes_liquidity_metrics_for_past_date_only_as
 
     unavailable_past = etf_data.probe_etf_capabilities("510300", _PAST)
     assert "liquidity_metrics" in unavailable_past
+    assert "peer_comparison" in unavailable_past
 
 
 def test_get_fundamentals_omits_block_when_no_date_column(monkeypatch):

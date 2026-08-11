@@ -7,8 +7,9 @@ The two sources have deliberately separate responsibilities:
 * Eastmoney's fund profile supplies the fund type and tracking-index fields
   needed to classify an exchange-traded fund.
 
-``InstrumentProfile`` is built by ``instrument.profile_from_fund_master`` after
-the user confirms any missing provider-qualified tracking-index code.
+``InstrumentProfile`` is built by ``instrument.profile_from_fund_master`` as
+soon as ETF identity is confirmed. A provider-qualified tracking-index code is
+optional enrichment rather than a prerequisite for ETF analysis.
 """
 
 from __future__ import annotations

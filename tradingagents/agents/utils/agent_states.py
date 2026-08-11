@@ -73,7 +73,10 @@ class AgentState(MessagesState):
 
     # data quality gate
     data_quality_summary: Annotated[str, "Quality gate assessment of all analyst reports (hard checks + LLM review)"]
-    data_quality_failed: Annotated[bool, "True when hard-check fail_count meets the scaled threshold"]
+    data_quality_failed: Annotated[
+        bool,
+        "True when hard checks meet the threshold or detect a critical ETF violation",
+    ]
 
     # researcher team discussion step
     investment_debate_state: Annotated[

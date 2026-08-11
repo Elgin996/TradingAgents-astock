@@ -142,6 +142,8 @@ def test_log_state_write_read_round_trip(tmp_path, monkeypatch):
         {
             "company_of_interest": "510300",
             "final_trade_decision": "HOLD",
+            "data_quality_summary": "质量门控通过",
+            "data_quality_failed": False,
         },
     )
 
@@ -150,6 +152,9 @@ def test_log_state_write_read_round_trip(tmp_path, monkeypatch):
     assert len(entries) == 1
     assert entries[0]["analysis_mode"] == "etf"
     assert entries[0]["instrument_profile"]["tracking_index_name"] == "沪深300指数"
+    saved = history.load_analysis(entries[0]["path"])
+    assert saved["data_quality_summary"] == "质量门控通过"
+    assert saved["data_quality_failed"] is False
 
 
 def test_incomplete_task_round_trip(tmp_path, monkeypatch):

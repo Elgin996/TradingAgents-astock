@@ -75,3 +75,35 @@ def lookup_tracking_index_code(tracking_index_name: str | None) -> tuple[str, st
         if key and key in token:
             return value
     return None
+
+
+def infer_tracking_index_provider(
+    code: str, tracking_index_name: str | None = None
+) -> str:
+    """Infer an index publisher without making it a required user input.
+
+    Prefer an exact catalog code match.  For indices outside the small local
+    catalog, well-known publisher prefixes in the disclosed index name provide
+    a useful attribution; otherwise keep the provenance explicitly unknown.
+    """
+    normalized_code = code.strip()
+    catalog_providers = {
+        provider
+        for catalog_code, provider in _INDEX_CATALOG.values()
+        if catalog_code == normalized_code
+    }
+    if len(catalog_providers) == 1:
+        return next(iter(catalog_providers))
+
+    name = (tracking_index_name or "").strip()
+    provider_prefixes = (
+        ("中证", "CSI"),
+        ("上证", "SSE"),
+        ("深证", "SZSE"),
+        ("创业板", "SZSE"),
+        ("国证", "CNI"),
+    )
+    for prefix, provider in provider_prefixes:
+        if prefix in name:
+            return provider
+    return "UNKNOWN"

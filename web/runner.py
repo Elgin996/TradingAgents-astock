@@ -107,7 +107,9 @@ def _run(
     from tradingagents.graph.trading_graph import TradingAgentsGraph
 
     from tradingagents.dataflows.capability_guard import (
+        reset_active_analysis_date,
         reset_active_capabilities,
+        set_active_analysis_date,
         set_active_capabilities,
     )
 
@@ -132,6 +134,7 @@ def _run(
     capability_token = set_active_capabilities(
         graph.analysis_capabilities if analysis_mode == "etf" else None
     )
+    date_token = set_active_analysis_date(trade_date)
 
     last_chunk: dict[str, Any] = {}
 
@@ -196,6 +199,7 @@ def _run(
         clear_incomplete_task(ticker, trade_date, analysis_mode)
     finally:
         graph.close_graph_run()
+        reset_active_analysis_date(date_token)
         reset_active_capabilities(capability_token)
 
 

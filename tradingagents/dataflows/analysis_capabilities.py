@@ -75,8 +75,6 @@ class AnalysisCapabilities:
             return cls(frozenset(), {})
         if not instrument_profile or instrument_profile.get("security_type") != "etf":
             raise ValueError("ETF analysis requires a frozen ETF instrument profile")
-        if not instrument_profile.get("tracking_index_code"):
-            raise ValueError("ETF analysis requires a tracking index code")
         unavailable = {**PHASE_CLOSED_CAPABILITIES, **(unavailable or {})}
         return cls(
             ETF_ENABLED_CAPABILITIES - set(unavailable),

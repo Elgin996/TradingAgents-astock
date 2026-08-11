@@ -1,4 +1,5 @@
 from tradingagents.dataflows.index_catalog import (
+    infer_tracking_index_provider,
     lookup_tracking_index_code,
     normalize_tracking_index_name,
 )
@@ -17,6 +18,12 @@ def test_catalog_maps_common_indices():
     assert lookup_tracking_index_code("创业板指数(价格)") == ("399006", "SZSE")
     assert lookup_tracking_index_code("上证科创板50成份指数") == ("000688", "SSE")
     assert lookup_tracking_index_code("中证全指半导体产品与设备指数") is None
+
+
+def test_provider_is_inferred_without_user_input():
+    assert infer_tracking_index_provider("000300") == "CSI"
+    assert infer_tracking_index_provider("931865", "中证全指半导体指数") == "CSI"
+    assert infer_tracking_index_provider("987654", "未收录主题指数") == "UNKNOWN"
 
 
 def test_catalog_profile_is_auditable_and_not_user_supplied():

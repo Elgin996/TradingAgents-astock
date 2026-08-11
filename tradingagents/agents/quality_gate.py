@@ -1,3 +1,4 @@
+import re
 from typing import Optional
 
 REPORT_FIELDS = {
@@ -35,8 +36,21 @@ ETF_FORBIDDEN_TERMS = ("公司营收", "净利润", "董监高", "解禁", "限�
 # When a forbidden term appears within this many characters of one of these
 # negation/exclusion markers, it is a compliant disclosure ("not applicable to
 # this ETF") rather than a genuine stock-logic leak, and must not be flagged.
-_NEGATION_MARKERS = ("不适用", "不涉及", "未使用", "无相关", "已排除", "N/A")
+_NEGATION_MARKERS = (
+    "不适用",
+    "不涉及",
+    "未使用",
+    "无相关",
+    "已排除",
+    "不提供",
+    "不比较",
+    "禁止",
+    "不是",
+    "并非",
+    "N/A",
+)
 _NEGATION_WINDOW = 12
+ETF_IDENTITY_CONFLICT_TERMS = ("LOF",)
 
 MIN_REPORT_LENGTH = 200
 
@@ -49,29 +63,88 @@ FAILURE_MARKERS = [
 ]
 
 
-def find_forbidden_term_hits(report: str) -> list[str]:
-    """Return ETF-forbidden terms genuinely used (not declared inapplicable).
+def _is_excluded_occurrence(report: str, pos: int, term: str) -> bool:
+    """Recognize local negation and lists under an exclusion lead-in."""
+    window = report[
+        max(0, pos - _NEGATION_WINDOW): pos + len(term) + _NEGATION_WINDOW
+    ]
+    if any(marker in window for marker in _NEGATION_MARKERS):
+        return True
 
-    A term only counts as a hit if at least one of its occurrences lacks a
-    nearby negation/exclusion marker (e.g. "不适用：龙虎榜（个股专属）" is not
-    a hit; "该 ETF 的解禁压力将在下月释放" is).
-    """
+    # Markdown bullets inherit a paragraph lead-in such as
+    # "以下维度不提供：\n- 公司营收\n- 龙虎榜". Keep this broader check
+    # inside the current paragraph so an unrelated negation cannot excuse a
+    # later, genuine use of stock logic.
+    block_start = report.rfind("\n\n", 0, pos) + 2
+    block_end = report.find("\n\n", pos)
+    if block_end == -1:
+        block_end = len(report)
+    block = report[block_start:block_end]
+    first_line = block.splitlines()[0] if block else ""
+    return any(marker in first_line for marker in _NEGATION_MARKERS)
+
+
+def _find_unexcluded_hits(report: str, terms: tuple[str, ...]) -> list[str]:
+    """Return terms with at least one use outside exclusion context."""
     hits: list[str] = []
-    for term in ETF_FORBIDDEN_TERMS:
+    for term in terms:
         search_from = 0
         violated = False
         while True:
             pos = report.find(term, search_from)
             if pos == -1:
                 break
-            window = report[max(0, pos - _NEGATION_WINDOW): pos + len(term) + _NEGATION_WINDOW]
-            if not any(marker in window for marker in _NEGATION_MARKERS):
+            if not _is_excluded_occurrence(report, pos, term):
                 violated = True
                 break
             search_from = pos + len(term)
         if violated:
             hits.append(term)
     return hits
+
+
+def find_forbidden_term_hits(report: str) -> list[str]:
+    """Return ETF-forbidden terms genuinely used, not merely excluded."""
+    return _find_unexcluded_hits(report, ETF_FORBIDDEN_TERMS)
+
+
+def find_etf_identity_conflicts(report: str) -> list[str]:
+    """Return incompatible product types asserted in an ETF report."""
+    return _find_unexcluded_hits(report, ETF_IDENTITY_CONFLICT_TERMS)
+
+
+def _etf_semantic_issues(analyst_type: str, report: str) -> tuple[list[str], bool]:
+    """Return semantic issues and whether a critical source is absent."""
+    issues: list[str] = []
+    critical_missing = False
+    if analyst_type == "market" and re.search(
+        r"(?:跟踪)?指数.{0,60}(?:未能取得|无法(?:获取|量化)|无有效数据|数据缺失)",
+        report,
+        flags=re.DOTALL,
+    ):
+        issues.append("跟踪指数行情缺失")
+        critical_missing = True
+    if re.search(
+        r"(?:数据状态|状态标记为).{0,12}[`*]*stale",
+        report,
+        flags=re.IGNORECASE,
+    ):
+        issues.append("使用过期披露数据")
+    return issues, critical_missing
+
+
+def _tracking_index_code(profile: object) -> str | None:
+    """Read an optional code from flat or frozen InstrumentProfile shapes."""
+    if not isinstance(profile, dict):
+        return None
+    raw = profile.get("tracking_index_code")
+    if isinstance(raw, dict):
+        value = raw.get("value")
+        if isinstance(value, dict):
+            raw = value.get("code")
+        else:
+            raw = value
+    return str(raw) if raw else None
 
 
 def _hard_check_report(
@@ -91,6 +164,14 @@ def _hard_check_report(
                 f"{name}报告包含禁止的个股逻辑：{'、'.join(forbidden_hits)}",
                 forbidden_hits,
             )
+        identity_conflicts = find_etf_identity_conflicts(report)
+        if identity_conflicts:
+            name = ANALYST_NAMES.get(analyst_type, analyst_type)
+            return (
+                "F",
+                f"{name}报告与冻结的 ETF 类型冲突：{'、'.join(identity_conflicts)}",
+                [],
+            )
     if length < MIN_REPORT_LENGTH:
         return ("D", f"报告过短 ({length} chars < {MIN_REPORT_LENGTH})", [])
 
@@ -109,10 +190,17 @@ def _hard_check_report(
         issues.append("缺少汇总表格")
     if missing_count > 0:
         issues.append(f"{missing_count} 处数据缺失")
+    semantic_issues: list[str] = []
+    critical_missing = False
+    if analysis_mode == "etf":
+        semantic_issues, critical_missing = _etf_semantic_issues(
+            analyst_type, report
+        )
+        issues.extend(semantic_issues)
 
-    if missing_count >= 3:
+    if critical_missing or missing_count >= 3:
         return ("C", "；".join(issues), [])
-    if not has_table or missing_count > 0:
+    if not has_table or missing_count > 0 or semantic_issues:
         return ("B", "；".join(issues) if issues else "基本合格", [])
 
     return ("A", f"完整 ({length} chars)", [])
@@ -195,8 +283,16 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
     def quality_gate_node(state) -> dict:
         trade_date = state["trade_date"]
         ticker = state["company_of_interest"]
-        unavailable = state.get("analysis_unavailable_capabilities", {})
+        unavailable = dict(state.get("analysis_unavailable_capabilities", {}))
         capabilities = state.get("analysis_capabilities")
+        missing_tracking_code = analysis_mode == "etf" and not _tracking_index_code(
+            state.get("instrument_profile")
+        )
+        if missing_tracking_code:
+            unavailable.setdefault(
+                "tracking_index_price_history",
+                "未提供跟踪指数代码；本次仅分析 ETF 自身行情。",
+            )
 
         fields = dict(base_fields)
         if analysis_mode == "etf" and capabilities is not None:
@@ -220,6 +316,7 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
 
         hard_results = {}
         forbidden_hits_by_analyst: dict[str, list[str]] = {}
+        identity_conflicts_by_analyst: dict[str, list[str]] = {}
         for analyst_type, field in fields.items():
             grade, detail, forbidden_hits = _hard_check_report(
                 analyst_type, reports[field], analysis_mode
@@ -227,6 +324,17 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
             hard_results[analyst_type] = (grade, detail)
             if forbidden_hits:
                 forbidden_hits_by_analyst[analyst_type] = forbidden_hits
+            if analysis_mode == "etf":
+                identity_conflicts = find_etf_identity_conflicts(reports[field])
+                if identity_conflicts:
+                    identity_conflicts_by_analyst[analyst_type] = identity_conflicts
+        if missing_tracking_code and "market" in hard_results:
+            grade, detail = hard_results["market"]
+            if grade not in ("F", "D"):
+                hard_results["market"] = (
+                    "C",
+                    f"{detail}；未提供跟踪指数代码，指数行情对比不可用",
+                )
 
         hard_summary_lines = []
         for analyst_type, (grade, detail) in hard_results.items():
@@ -238,11 +346,12 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
             1 for _, (g, _) in hard_results.items() if g in ("F", "D")
         )
         forbidden_term_hit = bool(forbidden_hits_by_analyst)
+        identity_conflict_hit = bool(identity_conflicts_by_analyst)
         # A genuine forbidden-term leak (individual-stock logic in an ETF
         # report) is a standalone blocking signal — it must not need to wait
         # for enough *other* reports to also fail before the run is blocked.
         data_quality_failed = bool(fields) and (
-            fail_count >= threshold or forbidden_term_hit
+            fail_count >= threshold or forbidden_term_hit or identity_conflict_hit
         )
 
         llm_review = ""
@@ -260,12 +369,14 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
         verdict_reason = f"{fail_count} 项硬检查未达标，阈值为 {threshold} 项。"
         if forbidden_term_hit:
             verdict_reason += " 检测到禁用词命中，独立阻断（不受阈值影响）。"
+        if identity_conflict_hit:
+            verdict_reason += " 检测到证券类型冲突，独立阻断（不受阈值影响）。"
         summary = (
             f"## 数据质量门控结果\n\n"
             f"**标的**: {ticker} | **交易日**: {trade_date}\n\n"
             f"### 硬检查结果\n{hard_summary}\n\n"
             f"### LLM 复审\n"
-            f"{llm_review if llm_review else '（跳过 — 多数报告未通过硬检查）'}\n\n"
+            f"{llm_review if llm_review else '（跳过 — 硬检查触发阻断）'}\n\n"
             f"### 门控判定\n"
             f"**{verdict}** — {verdict_reason}\n"
         )
@@ -273,6 +384,11 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
             summary += "\n### 禁用词命中\n" + "\n".join(
                 f"- {ANALYST_NAMES.get(analyst_type, analyst_type)}: {'、'.join(hits)}"
                 for analyst_type, hits in forbidden_hits_by_analyst.items()
+            ) + "\n"
+        if identity_conflicts_by_analyst:
+            summary += "\n### 证券类型冲突\n" + "\n".join(
+                f"- {ANALYST_NAMES.get(analyst_type, analyst_type)}: {'、'.join(hits)}"
+                for analyst_type, hits in identity_conflicts_by_analyst.items()
             ) + "\n"
         if unavailable:
             summary += "\n### 不可得数据\n" + "\n".join(

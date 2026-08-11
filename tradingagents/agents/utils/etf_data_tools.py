@@ -3,7 +3,10 @@
 from typing import Annotated
 from langchain_core.tools import tool
 from .core_stock_tools import route_to_vendor
-from tradingagents.dataflows.capability_guard import assert_tool_allowed
+from tradingagents.dataflows.capability_guard import (
+    analysis_date_for_tool,
+    assert_tool_allowed,
+)
 
 
 @tool
@@ -25,7 +28,9 @@ def get_etf_quote(
     historical analysis.
     """
     assert_tool_allowed("get_etf_quote")
-    return route_to_vendor("get_etf_quote", symbol, end_date)
+    return route_to_vendor(
+        "get_etf_quote", symbol, analysis_date_for_tool(end_date)
+    )
 
 
 @tool
@@ -42,7 +47,9 @@ def get_etf_announcements(
 ) -> str:
     """Fetch dated fund announcements up to the analysis date."""
     assert_tool_allowed("get_etf_announcements")
-    return route_to_vendor("get_etf_announcements", symbol, end_date)
+    return route_to_vendor(
+        "get_etf_announcements", symbol, analysis_date_for_tool(end_date)
+    )
 
 
 @tool
@@ -57,7 +64,9 @@ def get_etf_peer_comparison(
     end_date is before today.
     """
     assert_tool_allowed("get_etf_peer_comparison")
-    return route_to_vendor("get_etf_peer_comparison", symbol, end_date)
+    return route_to_vendor(
+        "get_etf_peer_comparison", symbol, analysis_date_for_tool(end_date)
+    )
 
 
 @tool
@@ -71,4 +80,6 @@ def get_etf_structure_alerts(
     end_date is before today.
     """
     assert_tool_allowed("get_etf_structure_alerts")
-    return route_to_vendor("get_etf_structure_alerts", symbol, end_date)
+    return route_to_vendor(
+        "get_etf_structure_alerts", symbol, analysis_date_for_tool(end_date)
+    )

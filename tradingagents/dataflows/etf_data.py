@@ -56,7 +56,15 @@ def _reject_past_date(end_date: str | None, fn_name: str) -> DataPoint | None:
     requirement for ETF analysis, not an opt-in.
     """
     if not end_date:
-        return None
+        return DataPoint(
+            None,
+            None,
+            None,
+            _now(),
+            "point-in-time guard",
+            "unsupported",
+            f"[{fn_name}] 缺少分析日期，无法确认实时快照是否存在前视偏差。",
+        )
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     if end_date >= today:
         return None
@@ -546,14 +554,20 @@ def probe_etf_capabilities(symbol: str, trade_date: str) -> dict[str, str]:
     Price history/technical data are left enabled here because the downstream
     Sina adapter is independently retried when an analyst requests it.
     """
-    # peer_comparison is intentionally not probed here: discovery fans out to
-    # several Eastmoney calls and would double the Stage-3 analyst cost.
+    # Live peer comparison is not probed because discovery fans out to several
+    # Eastmoney calls. Historical runs are deterministically disabled before
+    # the analyst starts because this capability includes Tencent snapshots.
     probes = {
         "liquidity_metrics": lambda: get_etf_quote(symbol, trade_date),
         "shares_and_aum": lambda: get_etf_shares_aum(symbol),
         "index_news_policy": lambda: get_etf_announcements(symbol, trade_date),
     }
     unavailable: dict[str, str] = {}
+    peer_refusal = _reject_past_date(trade_date, "get_etf_peer_comparison")
+    if peer_refusal is not None:
+        unavailable["peer_comparison"] = (
+            peer_refusal.notes or "历史日期不可使用实时同类 ETF 快照"
+        )
     for capability, fetch in probes.items():
         try:
             payload = json.loads(fetch())

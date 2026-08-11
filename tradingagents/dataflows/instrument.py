@@ -66,9 +66,6 @@ def profile_from_fund_master(
             code=user_tracking_index_code or "",
             provider=user_tracking_index_provider or "",
         )
-    if not record.tracking_index_code or not record.tracking_index_provider:
-        raise ValueError("缺少供应方标识的跟踪指数代码")
-
     retrieved_at = utc_now()
     price_limit = derive_price_limit_pct(
         symbol=record.symbol,
@@ -83,20 +80,24 @@ def profile_from_fund_master(
         etf_asset_type="domestic_equity",
         fund_name=record.fund_name,
         tracking_index_name=record.tracking_index_name,
-        tracking_index_code=DataPoint(
-            value={
-                "code": record.tracking_index_code,
-                "provider": record.tracking_index_provider,
-            },
-            unit=None,
-            as_of=None,
-            retrieved_at=retrieved_at,
-            source={
-                "user_supplied": "user",
-                "catalog": "index_catalog",
-            }.get(record.tracking_index_code_source, "security_master"),
-            status="ok",
-            notes=record.tracking_index_code_source,
+        tracking_index_code=(
+            DataPoint(
+                value={
+                    "code": record.tracking_index_code,
+                    "provider": record.tracking_index_provider,
+                },
+                unit=None,
+                as_of=None,
+                retrieved_at=retrieved_at,
+                source={
+                    "user_supplied": "user",
+                    "catalog": "index_catalog",
+                }.get(record.tracking_index_code_source, "security_master"),
+                status="ok",
+                notes=record.tracking_index_code_source,
+            )
+            if record.tracking_index_code and record.tracking_index_provider
+            else None
         ),
         profile_as_of=datetime.now(timezone.utc).date().isoformat(),
         source="mootdx securities master + Eastmoney fund profile",
