@@ -12,6 +12,8 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Iterable, Mapping, Sequence
 
+from .config import load_project_versioned_config
+
 from .models import (
     DataConflict,
     DataQualityReport,
@@ -59,10 +61,15 @@ def expected_trade_dates(
     *,
     calendar: Iterable[date] | None = None,
 ) -> list[date]:
-    """Return the supplied exchange calendar, or a conservative weekday set."""
+    """Return dates from an authoritative supplied exchange calendar.
+
+    Weekdays are not a valid A-share trading calendar because weekday public
+    holidays are common.  Without a calendar, callers receive no inferred
+    dates and validation records the ambiguity instead of inventing gaps.
+    """
     if calendar is not None:
         return sorted({d for d in calendar if start <= d <= end})
-    return _business_days(start, end)
+    return []
 
 
 def validate_bars(
@@ -107,12 +114,14 @@ def validate_bars(
             result.flags.append(f"schema_error:{type(exc).__name__}")
 
     result.bars = sorted(raw_bars, key=lambda item: item.trade_date)
-    if request is not None and result.bars:
+    if request is not None and result.bars and calendar is not None:
         expected = set(expected_trade_dates(request.start_date, request.end_date, calendar=calendar))
         actual = {bar.trade_date for bar in result.bars}
         result.missing_dates = sorted(expected - actual)
         if result.missing_dates:
             result.flags.append("missing_trade_dates")
+    elif request is not None and result.bars:
+        result.flags.append("calendar_ambiguous")
     if result.duplicate_dates:
         result.flags.append("duplicate_dates")
     return result
@@ -129,17 +138,23 @@ def check_cross_source_consistency(
     left: Sequence[NormalizedBar],
     right: Sequence[NormalizedBar],
     *,
-    sample_size: int = 5,
-    price_tolerance: Decimal | float = Decimal("0.005"),
-    volume_tolerance: Decimal | float = Decimal("0.10"),
+    sample_size: int | None = None,
+    price_tolerance: Decimal | float | None = None,
+    volume_tolerance: Decimal | float | None = None,
 ) -> list[DataConflict]:
     """Compare overlapping bars and return every material conflict."""
     left_by_date = {bar.trade_date: bar for bar in left}
     right_by_date = {bar.trade_date: bar for bar in right}
-    overlap = sorted(left_by_date.keys() & right_by_date.keys())[-sample_size:]
     conflicts: list[DataConflict] = []
-    price_tolerance = Decimal(str(price_tolerance))
-    volume_tolerance = Decimal(str(volume_tolerance))
+    rules = load_project_versioned_config("data_quality_rules_v1.yaml")
+    sample_size = int(rules["cross_source_sample_size"] if sample_size is None else sample_size)
+    overlap = sorted(left_by_date.keys() & right_by_date.keys())[-sample_size:]
+    price_tolerance = Decimal(str(
+        rules["price_relative_tolerance"] if price_tolerance is None else price_tolerance
+    ))
+    volume_tolerance = Decimal(str(
+        rules["volume_relative_tolerance"] if volume_tolerance is None else volume_tolerance
+    ))
     for trade_date in overlap:
         a, b = left_by_date[trade_date], right_by_date[trade_date]
         fields: list[str] = []
@@ -189,11 +204,13 @@ def merge_bars(
     return MergeResult(sorted(by_date.values(), key=lambda item: item.trade_date), found_conflicts, flags)
 
 
-def _last_expected_date(request: MarketDataRequest) -> date:
-    expected = request.end_date
-    while expected.weekday() >= 5:
-        expected -= timedelta(days=1)
-    return expected
+def _last_expected_date(
+    request: MarketDataRequest, calendar: Iterable[date] | None = None
+) -> date | None:
+    if calendar is None:
+        return None
+    candidates = [day for day in calendar if request.start_date <= day <= request.end_date]
+    return max(candidates, default=None)
 
 
 def build_quality_report(
@@ -209,7 +226,9 @@ def build_quality_report(
     warmup_complete: bool = True,
 ) -> DataQualityReport:
     """Apply hard-block-first quality rules to one normalized dataset."""
-    checked = validation or validate_bars(bars, request, calendar=calendar)
+    calendar_dates = tuple(calendar) if calendar is not None else None
+    checked = validation or validate_bars(bars, request, calendar=calendar_dates)
+    rules = load_project_versioned_config("data_quality_rules_v1.yaml")
     clean_bars = checked.bars
     flags = list(dict.fromkeys(checked.flags))
     conflicts = list(conflicts)
@@ -220,8 +239,19 @@ def build_quality_report(
     last_date = max((bar.trade_date for bar in clean_bars), default=None)
     stale_days = 0
     if last_date is not None:
-        stale_days = max(0, (_last_expected_date(request) - last_date).days)
-        if stale_days >= 1:
+        expected_last = _last_expected_date(request, calendar_dates)
+        if expected_last is not None:
+            stale_days = sum(
+                1 for day in calendar_dates or () if last_date < day <= expected_last
+            )
+        else:
+            stale_days = max(0, (request.end_date - last_date).days)
+        stale_limit = (
+            int(rules["stale_after_expected_trading_days"])
+            if expected_last is not None
+            else int(rules["max_stale_calendar_days_without_calendar"])
+        )
+        if stale_days >= stale_limit:
             flags.append("stale")
     else:
         flags.append("no_valid_bars")
@@ -234,13 +264,20 @@ def build_quality_report(
 
     completeness = 0.0
     if request.end_date >= request.start_date:
-        expected_count = max(1, len(expected_trade_dates(request.start_date, request.end_date, calendar=calendar)))
-        completeness = min(1.0, len(clean_bars) / expected_count)
+        expected_dates = expected_trade_dates(
+            request.start_date, request.end_date, calendar=calendar_dates
+        )
+        completeness = (
+            min(1.0, len(clean_bars) / max(1, len(expected_dates)))
+            if expected_dates
+            else (1.0 if clean_bars else 0.0)
+        )
     freshness = 1.0 if last_date is None else (1.0 if stale_days == 0 else max(0.0, 1.0 - stale_days / 5))
     consistency = 0.0 if conflicts else 1.0
-    semantics = 0.0 if "adjustment_unknown" in flags or "schema_error" in " ".join(flags) else 1.0
-    hard_block = bool(conflicts or not clean_bars or "schema_error" in " ".join(flags))
-    severe_invalid = checked.invalid_rows > max(1, len(clean_bars) // 5)
+    semantics = 0.0 if "adjustment_unknown" in flags or "adjustment_mismatch" in flags or "schema_error" in " ".join(flags) else 1.0
+    hard_block = bool(conflicts or not clean_bars or "adjustment_mismatch" in flags or "schema_error" in " ".join(flags))
+    total_rows = len(clean_bars) + checked.invalid_rows
+    severe_invalid = bool(total_rows) and checked.invalid_rows / total_rows > float(rules["max_invalid_row_ratio"])
     if severe_invalid:
         hard_block = True
     if hard_block:
@@ -250,7 +287,7 @@ def build_quality_report(
         grade, decision = "D", "block"
     elif "stale" in flags or checked.missing_dates or source_status in {"MERGED", "PARTIAL"}:
         grade, decision = "C", "observe_only"
-    elif source_status == "FALLBACK_OK" or "single_source_unverified" in flags:
+    elif source_status == "FALLBACK_OK" or "single_source_unverified" in flags or "calendar_ambiguous" in flags:
         grade, decision = "B", "allow"
     else:
         grade, decision = "A", "allow"
@@ -283,4 +320,3 @@ def validate_dataset(*args, **kwargs) -> DataQualityReport:
 
 def validate_market_data(*args, **kwargs) -> DataQualityReport:
     return build_quality_report(*args, **kwargs)
-

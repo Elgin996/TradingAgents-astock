@@ -28,6 +28,7 @@ class EastmoneyAdapter:
                 request.symbol,
                 request.start_date.isoformat(),
                 request.end_date.isoformat(),
+                request.adjustment,
             )
         else:
             frame = self.fetcher(request)

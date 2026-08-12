@@ -23,7 +23,7 @@ class ConditionalLogic:
         """Determine if market analysis should continue."""
         messages = state["messages"]
         last_message = messages[-1]
-        if last_message.tool_calls:
+        if getattr(last_message, "tool_calls", None):
             return "tools_market"
         return "Msg Clear Market"
 
@@ -31,7 +31,7 @@ class ConditionalLogic:
         """Determine if social media analysis should continue."""
         messages = state["messages"]
         last_message = messages[-1]
-        if last_message.tool_calls:
+        if getattr(last_message, "tool_calls", None):
             return "tools_social"
         return "Msg Clear Social"
 
@@ -39,7 +39,7 @@ class ConditionalLogic:
         """Determine if news analysis should continue."""
         messages = state["messages"]
         last_message = messages[-1]
-        if last_message.tool_calls:
+        if getattr(last_message, "tool_calls", None):
             return "tools_news"
         return "Msg Clear News"
 
@@ -47,7 +47,7 @@ class ConditionalLogic:
         """Determine if fundamentals analysis should continue."""
         messages = state["messages"]
         last_message = messages[-1]
-        if last_message.tool_calls:
+        if getattr(last_message, "tool_calls", None):
             return "tools_fundamentals"
         return "Msg Clear Fundamentals"
 
@@ -55,7 +55,7 @@ class ConditionalLogic:
         """Determine if policy analysis should continue."""
         messages = state["messages"]
         last_message = messages[-1]
-        if last_message.tool_calls:
+        if getattr(last_message, "tool_calls", None):
             return "tools_policy"
         return "Msg Clear Policy"
 
@@ -63,7 +63,7 @@ class ConditionalLogic:
         """Determine if hot money tracking should continue."""
         messages = state["messages"]
         last_message = messages[-1]
-        if last_message.tool_calls:
+        if getattr(last_message, "tool_calls", None):
             return "tools_hot_money"
         return "Msg Clear Hot_money"
 
@@ -71,13 +71,13 @@ class ConditionalLogic:
         """Determine if lockup/reduction analysis should continue."""
         messages = state["messages"]
         last_message = messages[-1]
-        if last_message.tool_calls:
+        if getattr(last_message, "tool_calls", None):
             return "tools_lockup"
         return "Msg Clear Lockup"
 
     def _should_continue_etf_analyst(self, state: AgentState, name: str):
         last_message = state["messages"][-1]
-        return f"tools_{name}" if last_message.tool_calls else f"Msg Clear {name.capitalize()}"
+        return f"tools_{name}" if getattr(last_message, "tool_calls", None) else f"Msg Clear {name.capitalize()}"
 
     def should_continue_etf_liquidity(self, state: AgentState):
         return self._should_continue_etf_analyst(state, "etf_liquidity")

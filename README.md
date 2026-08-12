@@ -17,7 +17,7 @@
   <a href="https://github.com/simonlin1212/tradingagents-astock/network/members"><img alt="Forks" src="https://img.shields.io/github/forks/simonlin1212/tradingagents-astock?style=social"/></a>
   <a href="https://arxiv.org/abs/2412.20138"><img alt="论文" src="https://img.shields.io/badge/论文-arXiv_2412.20138-B31B1B?logo=arxiv"/></a>
   <a href="./LICENSE"><img alt="License" src="https://img.shields.io/badge/License-Apache_2.0-blue"/></a>
-  <a href="./CHANGES_FROM_UPSTREAM.md"><img alt="改动记录" src="https://img.shields.io/badge/改动记录-CHANGES-orange"/></a>
+  <a href="./docs/CHANGES_FROM_UPSTREAM.md"><img alt="改动记录" src="https://img.shields.io/badge/改动记录-CHANGES-orange"/></a>
 </p>
 
 <p align="center">
@@ -490,7 +490,9 @@ TradingAgents-Astock/
 │       ├── progress_panel.py  # 实时进度面板
 │       └── report_viewer.py   # 报告展示
 ├── test_astock.py             # E2E 集成测试
-├── CHANGES_FROM_UPSTREAM.md   # 与上游的完整改动记录
+├── docs/                      # 项目文档
+│   ├── CHANGES_FROM_UPSTREAM.md
+│   └── issues/                # Issue 归档
 ├── NOTICE                     # Apache 2.0 归属声明
 ├── LICENSE                    # Apache 2.0 许可证
 └── pyproject.toml             # 包定义与依赖
@@ -529,7 +531,7 @@ TradingAgents-Astock/
 如果这个工具帮到了你的投研工作流，欢迎请作者喝杯咖啡 ☕
 
 <p align="center">
-  <a href="https://buymeacoffee.com/simonlin1212"><img src="./assets/bmc-qr.png" width="180" alt="Buy Me a Coffee"></a>
+  <a href="https://buymeacoffee.com/simonlin1212"><img src="assets/bmc-qr.png" width="180" alt="Buy Me a Coffee"></a>
 </p>
 
 > 想要什么功能？欢迎开 [Issue](https://github.com/simonlin1212/tradingagents-astock/issues) 提需求，赞助者的 Issue 优先处理。

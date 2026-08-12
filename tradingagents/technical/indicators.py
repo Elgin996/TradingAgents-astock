@@ -9,6 +9,7 @@ import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field
 
 from tradingagents.dataflows.models import IndicatorValue, NormalizedBar
+from tradingagents.dataflows.config import load_project_versioned_config
 
 
 INDICATOR_ENGINE_VERSION = "technical-indicators-v1"
@@ -47,6 +48,13 @@ class IndicatorConfig(BaseModel):
             self.volume_long_period,
             self.level_long_period,
         ) + self.warmup_buffer
+
+
+def load_indicator_config() -> IndicatorConfig:
+    """Build the runtime indicator configuration from its versioned file."""
+    return IndicatorConfig.model_validate(
+        load_project_versioned_config("indicator_config_v1.yaml")
+    )
 
 
 def _frame_from_bars(bars: Sequence[NormalizedBar | Mapping] | pd.DataFrame) -> pd.DataFrame:
@@ -89,7 +97,7 @@ def calculate_indicator_frame(
     config: IndicatorConfig | None = None,
 ) -> pd.DataFrame:
     """Calculate all v1 indicators from an already-frozen bar sequence."""
-    config = config or IndicatorConfig()
+    config = config or load_indicator_config()
     frame = _frame_from_bars(bars)
     if frame.empty:
         return frame
@@ -143,7 +151,7 @@ class IndicatorEngine:
     engine_version = INDICATOR_ENGINE_VERSION
 
     def __init__(self, config: IndicatorConfig | None = None):
-        self.config = config or IndicatorConfig()
+        self.config = config or load_indicator_config()
 
     def calculate_frame(self, bars, *, display_start: date | None = None) -> pd.DataFrame:
         frame = calculate_indicator_frame(bars, self.config)
@@ -180,4 +188,3 @@ class IndicatorEngine:
 
 def calculate_indicators(bars, config: IndicatorConfig | None = None):
     return IndicatorEngine(config).calculate(bars)
-

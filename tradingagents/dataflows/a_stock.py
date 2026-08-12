@@ -76,6 +76,12 @@ def _get_prefix(code: str) -> str:
     return "sz"
 
 
+def resolve_a_share_exchange(symbol: str) -> str:
+    """Return the canonical exchange for an A-share security code."""
+    code = _normalize_ticker(symbol)
+    return {"sh": "SSE", "sz": "SZSE", "bj": "BSE"}[_get_prefix(code)]
+
+
 def _index_symbol(code: str) -> str:
     """Preferred Sina/Tencent symbol for a catalogued index code."""
     from .index_catalog import INDEX_EXCHANGE_BY_CODE
@@ -758,7 +764,10 @@ def _sina_kline_fallback(code: str, start_date: str = None, end_date: str = None
 
 
 def _em_kline_with_amount(
-    code: str, start_date: str = None, end_date: str = None
+    code: str,
+    start_date: str = None,
+    end_date: str = None,
+    adjustment: str = "forward",
 ) -> pd.DataFrame:
     """Fetch daily OHLCV + Amount from Eastmoney push2his for ETF liquidity.
 
@@ -770,7 +779,9 @@ def _em_kline_with_amount(
         "fields1": "f1,f2,f3,f4,f5,f6",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
         "klt": "101",
-        "fqt": "1",
+        "fqt": {"raw": "0", "forward": "1", "backward": "2"}.get(
+            adjustment, "1"
+        ),
         "end": "20500101",
         "lmt": "800",
     }

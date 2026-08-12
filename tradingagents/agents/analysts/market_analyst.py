@@ -1,3 +1,4 @@
+from langchain_core.messages import AIMessage
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
@@ -29,7 +30,7 @@ def create_market_analyst(llm):
                 bundle = TechnicalEvidenceBundle.model_validate(bundle)
             report = render_evidence_bundle(bundle)
             return {
-                "messages": [],
+                "messages": [AIMessage(content=report)],
                 "market_report": report,
                 "technical_assessment": bundle.assessment.model_dump(mode="json") if bundle.assessment else None,
             }
@@ -44,7 +45,7 @@ def create_market_analyst(llm):
             analysis_start = current_date - timedelta(days=lookback)
             request = make_market_data_request(
                 symbol=state["company_of_interest"],
-                exchange=("BSE" if state["company_of_interest"].startswith(("8", "4")) else "SSE" if state["company_of_interest"].startswith(("5", "6", "9")) else "SZSE"),
+                exchange=_a_share_exchange(state["company_of_interest"]),
                 instrument_type="etf" if state.get("analysis_mode") == "etf" else "stock",
                 start_date=current_date - timedelta(days=warmup_days),
                 end_date=current_date,
@@ -52,9 +53,10 @@ def create_market_analyst(llm):
                 as_of=datetime.combine(current_date, time.min, tzinfo=timezone.utc),
             )
             result, bundle = build_technical_evidence(request, display_start=analysis_start)
+            report = render_evidence_bundle(bundle)
             return {
-                "messages": [],
-                "market_report": render_evidence_bundle(bundle),
+                "messages": [AIMessage(content=report)],
+                "market_report": report,
                 "market_data_quality": result.quality.model_dump(mode="json"),
                 "market_data_decision": result.quality.decision,
                 "market_snapshot_id": result.snapshot_id or "",
@@ -170,3 +172,10 @@ MACD 类：
         }
 
     return market_analyst_node
+
+
+def _a_share_exchange(symbol: str) -> str:
+    """Use the canonical A-share prefix resolver, including BSE 920xxx."""
+    from tradingagents.dataflows.a_stock import resolve_a_share_exchange
+
+    return resolve_a_share_exchange(symbol)

@@ -5,6 +5,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
+from uuid import uuid4
 import re
 from pathlib import Path
 from typing import Any
@@ -123,13 +125,10 @@ class SnapshotStore:
                 return snapshot_id
             raise SnapshotCorrupt("snapshot directory exists but is incomplete or corrupt")
         target.parent.mkdir(parents=True, exist_ok=True)
-        # ``tempfile.mkdtemp`` creates a restrictive Windows ACL in some
-        # managed runners. A deterministic sibling directory with normal
-        # workspace permissions is still private to this snapshot write and
-        # keeps the final directory publication atomic.
-        temp = target.parent / f".{digest}.tmp"
-        if temp.exists():
-            raise SnapshotCorrupt("incomplete snapshot staging directory already exists")
+        # A unique sibling avoids collisions between concurrent identical
+        # writers and makes a staging directory left by a crashed process
+        # harmless to later saves.
+        temp = target.parent / f".{digest}.{uuid4().hex}.tmp"
         temp.mkdir(parents=False)
         try:
             files: dict[str, bytes] = {
@@ -161,10 +160,16 @@ class SnapshotStore:
                     manifest["files"][relative] = {"sha256": _sha256(content), "size": len(content)}
             (temp / "manifest.json").write_bytes(_canonical(manifest))
             # Manifest itself is deliberately not listed in its own file map.
-            os.replace(str(temp), str(target))
+            try:
+                os.replace(str(temp), str(target))
+            except OSError:
+                # Another writer may have atomically published the identical
+                # content after our initial existence check.
+                if self.exists(snapshot_id):
+                    shutil.rmtree(temp, ignore_errors=True)
+                    return snapshot_id
+                raise
         except Exception:
-            import shutil
-
             shutil.rmtree(temp, ignore_errors=True)
             raise
         return snapshot_id

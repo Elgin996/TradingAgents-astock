@@ -401,8 +401,13 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
         # A genuine forbidden-term leak (individual-stock logic in an ETF
         # report) is a standalone blocking signal — it must not need to wait
         # for enough *other* reports to also fail before the run is blocked.
-        data_quality_failed = bool(fields) and (
+        report_quality_failed = bool(fields) and (
             fail_count >= threshold or forbidden_term_hit or identity_conflict_hit
+        )
+        data_quality_failed = (
+            report_quality_failed
+            or bool(market_quality_result["failed"])
+            or evidence_failed
         )
 
         llm_review = ""
@@ -422,6 +427,10 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
             verdict_reason += " 检测到禁用词命中，独立阻断（不受阈值影响）。"
         if identity_conflict_hit:
             verdict_reason += " 检测到证券类型冲突，独立阻断（不受阈值影响）。"
+        if market_quality_result["failed"]:
+            verdict_reason += " 市场数据质量决策为阻断。"
+        if evidence_failed:
+            verdict_reason += " 技术报告事实核验失败。"
         summary = (
             f"## 数据质量门控结果\n\n"
             f"**标的**: {ticker} | **交易日**: {trade_date}\n\n"
@@ -460,7 +469,7 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
 
         return {
             "data_quality_summary": summary,
-            "data_quality_failed": data_quality_failed or bool(market_quality_result["failed"]) or evidence_failed,
+            "data_quality_failed": data_quality_failed,
             "market_data_decision": market_quality_result["decision"],
             "technical_report_validation": (
                 evidence_validation.model_dump(mode="json")

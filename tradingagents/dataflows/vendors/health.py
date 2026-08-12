@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import threading
 from dataclasses import dataclass
 
 
@@ -40,18 +41,22 @@ class VendorHealthRegistry:
     def __init__(self, *, failure_threshold: int = 3, cooldown_seconds: float = 60.0, clock=time.monotonic):
         self._kwargs = {"failure_threshold": failure_threshold, "cooldown_seconds": cooldown_seconds, "clock": clock}
         self._breakers: dict[str, CircuitBreaker] = {}
+        self._lock = threading.RLock()
 
     def breaker(self, source: str) -> CircuitBreaker:
-        if source not in self._breakers:
-            self._breakers[source] = CircuitBreaker(**self._kwargs)
-        return self._breakers[source]
+        with self._lock:
+            if source not in self._breakers:
+                self._breakers[source] = CircuitBreaker(**self._kwargs)
+            return self._breakers[source]
 
     def allow(self, source: str) -> bool:
-        return self.breaker(source).allow_request()
+        with self._lock:
+            return self.breaker(source).allow_request()
 
     def record_success(self, source: str) -> None:
-        self.breaker(source).record_success()
+        with self._lock:
+            self.breaker(source).record_success()
 
     def record_failure(self, source: str) -> None:
-        self.breaker(source).record_failure()
-
+        with self._lock:
+            self.breaker(source).record_failure()

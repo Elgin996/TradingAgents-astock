@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import date, datetime, timezone
-from typing import Iterable, Mapping
+from typing import Callable, Iterable, Mapping
 
-from .config import get_config
+from .config import get_config, load_project_versioned_config
 from .models import (
     MarketDataRequest,
     MarketDataResult,
@@ -39,15 +40,22 @@ DEFAULT_MARKET_DATA_POLICY = {
     "per_attempt_timeout_seconds": 15,
 }
 
+_SHARED_HEALTH_REGISTRY = VendorHealthRegistry()
+
 
 def _policy_key(request: MarketDataRequest) -> str:
     return f"{request.instrument_type}_daily"
 
 
-def _expected_last_date(value: date) -> date:
-    while value.weekday() >= 5:
-        value = value.fromordinal(value.toordinal() - 1)
-    return value
+def _expected_last_date(
+    request: MarketDataRequest, calendar: Iterable[date] | None
+) -> date | None:
+    if calendar is None:
+        return None
+    return max(
+        (day for day in calendar if request.start_date <= day <= request.end_date),
+        default=None,
+    )
 
 
 class MarketDataService:
@@ -60,12 +68,15 @@ class MarketDataService:
         snapshot_store: SnapshotStore | None = None,
         config: Mapping | None = None,
         health_registry: VendorHealthRegistry | None = None,
+        trading_calendar: Iterable[date] | Callable[[MarketDataRequest], Iterable[date]] | None = None,
     ):
         self.config = dict(config or get_config())
         self.vendors = self._normalize_vendors(vendors)
         cache_root = self.config.get("data_cache_dir") or ".market-data-cache"
         self.snapshot_store = snapshot_store or SnapshotStore(cache_root)
-        self.health = health_registry or VendorHealthRegistry()
+        self.health = health_registry or _SHARED_HEALTH_REGISTRY
+        self.trading_calendar = trading_calendar
+        self.quality_rules = load_project_versioned_config("data_quality_rules_v1.yaml")
 
     @staticmethod
     def _normalize_vendors(vendors):
@@ -81,10 +92,46 @@ class MarketDataService:
 
     def _ordered_names(self, request: MarketDataRequest) -> list[str]:
         policy = dict(DEFAULT_MARKET_DATA_POLICY)
+        policy.update(load_project_versioned_config("market_data_policy.yaml"))
         policy.update(self.config.get("market_data_policy", {}))
         configured = policy.get(_policy_key(request), [])
         names = [str(name).strip() for name in configured if str(name).strip()]
         return [name for name in names if name in self.vendors][: int(policy.get("max_attempts", 2))]
+
+    def _policy(self) -> dict:
+        policy = dict(DEFAULT_MARKET_DATA_POLICY)
+        policy.update(load_project_versioned_config("market_data_policy.yaml"))
+        policy.update(self.config.get("market_data_policy", {}))
+        return policy
+
+    def _calendar_dates(self, request: MarketDataRequest) -> tuple[date, ...] | None:
+        if self.trading_calendar is None:
+            return None
+        values = self.trading_calendar(request) if callable(self.trading_calendar) else self.trading_calendar
+        return tuple(values)
+
+    def _is_current_enough(
+        self, last_date: date, request: MarketDataRequest, calendar: tuple[date, ...] | None
+    ) -> bool:
+        expected = _expected_last_date(request, calendar)
+        if expected is not None:
+            return last_date >= expected
+        max_gap = int(self.quality_rules["max_stale_calendar_days_without_calendar"])
+        return (request.end_date - last_date).days < max_gap
+
+    def _fetch_with_timeout(self, vendor: MarketDataVendor, request: MarketDataRequest):
+        timeout = float(self._policy().get("per_attempt_timeout_seconds", 15))
+        executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"market-data-{vendor.name}")
+        future = executor.submit(vendor.fetch_bars, request)
+        try:
+            return future.result(timeout=timeout)
+        except FuturesTimeoutError as exc:
+            future.cancel()
+            from .vendors.base import VendorTimeout
+
+            raise VendorTimeout(f"{vendor.name} timed out after {timeout:g}s") from exc
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
 
     def _make_attempt(
         self,
@@ -116,6 +163,7 @@ class MarketDataService:
         *,
         mode: str = "online",
         snapshot_id: str | None = None,
+        required_warmup: int | None = None,
     ) -> MarketDataResult:
         if mode not in {"online", "prefer_cache", "offline"}:
             raise ValueError("mode must be online, prefer_cache, or offline")
@@ -134,6 +182,7 @@ class MarketDataService:
         attempts: list[SourceAttempt] = []
         candidates: list[tuple[VendorBarsResult, object]] = []
         raw_responses = {}
+        calendar = self._calendar_dates(request)
         for source in self._ordered_names(request):
             vendor = self.vendors[source]
             if not self.health.allow(source):
@@ -158,15 +207,16 @@ class MarketDataService:
                     or request.adjustment not in capabilities.adjustments
                 ):
                     raise VendorUnsupportedRequest(f"{source} does not support this request")
-                result = vendor.fetch_bars(request)
+                result = self._fetch_with_timeout(vendor, request)
                 if not isinstance(result, VendorBarsResult):
                     raise VendorError(f"{source} returned an invalid structured result", error_code="schema_error")
-                checked = validate_bars(result.bars, request)
+                checked = validate_bars(result.bars, request, calendar=calendar)
                 raw_responses[source] = result.raw_response
                 if not checked.bars:
                     raise VendorError(f"{source} returned no valid bars", error_code="empty")
                 last_date = max(bar.trade_date for bar in checked.bars)
-                attempt_status = "success" if last_date >= _expected_last_date(request.end_date) else "stale"
+                current_enough = self._is_current_enough(last_date, request, calendar)
+                attempt_status = "success" if current_enough else "stale"
                 attempts.append(
                     self._make_attempt(
                         source,
@@ -180,7 +230,7 @@ class MarketDataService:
                 candidates.append((result, checked))
                 # A complete current source is sufficient; a second source is
                 # still used when the result is stale so the service can recover.
-                if last_date >= _expected_last_date(request.end_date):
+                if current_enough:
                     break
             except Exception as exc:
                 mapped = classify_exception(exc)
@@ -202,7 +252,10 @@ class MarketDataService:
                 )
 
         if not candidates:
-            quality = build_quality_report([], request, attempts=attempts, source_status="UNAVAILABLE")
+            quality = build_quality_report(
+                [], request, attempts=attempts, source_status="UNAVAILABLE", calendar=calendar,
+                warmup_complete=required_warmup is None,
+            )
             result = MarketDataResult(request=request, attempts=attempts, quality=quality)
             return self._snapshot(result, raw_responses)
 
@@ -236,6 +289,8 @@ class MarketDataService:
             source_status=source_status,
             conflicts=all_conflicts,
             single_source_unverified=len(candidates) < 2,
+            calendar=calendar,
+            warmup_complete=(required_warmup is None or len(selected_bars) >= required_warmup),
         )
         result = MarketDataResult(
             request=request,
@@ -257,7 +312,7 @@ class MarketDataService:
     def _snapshot(self, result: MarketDataResult, raw_responses: dict) -> MarketDataResult:
         try:
             snapshot_id = self.snapshot_store.save(result, raw_responses=raw_responses)
-        except OSError as exc:
+        except (OSError, SnapshotError) as exc:
             # A data result remains useful, but the missing snapshot must be
             # visible to callers rather than silently treated as reproducible.
             result.quality.flags.append("snapshot_write_failed")
@@ -291,11 +346,16 @@ def build_technical_evidence(
     from tradingagents.technical.signals import SignalEngine
 
     service = service or MarketDataService()
-    result = service.fetch(request, mode=mode, snapshot_id=snapshot_id)
+    indicator_engine = IndicatorEngine()
+    result = service.fetch(
+        request,
+        mode=mode,
+        snapshot_id=snapshot_id,
+        required_warmup=indicator_engine.config.required_warmup(),
+    )
     if result.quality.decision == "block" or not result.bars:
         bundle = build_evidence_bundle(result, display_start=display_start)
         return result, bundle
-    indicator_engine = IndicatorEngine()
     frame = indicator_engine.calculate_frame(result.bars)
     evaluation = SignalEngine(indicator_engine.config).run(
         frame,
