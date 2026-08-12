@@ -91,6 +91,7 @@ class GraphSetup:
         self,
         selected_analysts: Optional[Sequence[str]] = None,
         analysis_mode: str = "stock",
+        analysis_product: str | None = None,
     ):
         """Set up and compile the agent workflow graph.
 
@@ -181,6 +182,7 @@ class GraphSetup:
             self.llm_for("quality_gate"),
             selected_analysts=selected_analysts,
             analysis_mode=analysis_mode,
+            analysis_product=analysis_product,
         )
 
         # Create researcher and manager nodes

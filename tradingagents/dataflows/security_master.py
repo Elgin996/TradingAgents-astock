@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 FundClassification = Literal[
     "domestic_equity_etf",
+    "active_equity_etf",
     "unsupported_fund",
     "not_a_fund",
 ]
@@ -62,6 +63,8 @@ class FundMasterRecord:
     tracking_index_code: str | None = None
     tracking_index_provider: str | None = None
     tracking_index_code_source: TrackingIndexCodeSource = "missing"
+    etf_management_style: Literal["passive", "active"] | None = None
+    benchmark_name: str | None = None
 
 
 def _text(value: object) -> str | None:
@@ -154,14 +157,23 @@ def _classify(fields: dict[str, str]) -> tuple[FundClassification, str]:
             "unsupported_fund",
             "基金全称不包含“交易型开放式”（货币 ETF / LOF / 场外基金等）",
         )
+    if fund_type == "指数型-股票":
+        if not tracking_index or tracking_index == "该基金无跟踪标的":
+            return "unsupported_fund", "被动股票 ETF 缺少可确认的跟踪标的"
+        return "domestic_equity_etf", "交易型开放式、指数型-股票且具有跟踪标的"
+    # Active ETFs do not have to disclose a mechanical tracking target.  The
+    # fund type must still identify a domestic equity product; overseas,
+    # fixed-income, commodity and multi-asset types remain out of scope.
+    if "股票" in fund_type and "海外" not in fund_type and not any(
+        token in fund_type for token in ("债", "货币", "商品", "黄金", "REIT", "混合")
+    ):
+        return "active_equity_etf", "交易型开放式、境内股票型主动 ETF"
     if fund_type != "指数型-股票":
         return (
             "unsupported_fund",
-            f"基金类型为“{fund_type}”，不属于境内股票指数 ETF",
+            f"基金类型为“{fund_type}”，不属于境内股票 ETF",
         )
-    if not tracking_index or tracking_index == "该基金无跟踪标的":
-        return "unsupported_fund", "缺少可确认的跟踪标的"
-    return "domestic_equity_etf", "交易型开放式、指数型-股票且具有跟踪标的"
+    return "unsupported_fund", "无法确认 ETF 管理方式"
 
 
 @lru_cache(maxsize=512)
@@ -209,6 +221,12 @@ def _resolve_fund_master_cached(symbol: str, as_of: str) -> FundMasterRecord:
         tracking_index_code=tracking_index_code,
         tracking_index_provider=tracking_index_provider,
         tracking_index_code_source=tracking_index_code_source,
+        etf_management_style=(
+            "passive" if classification == "domestic_equity_etf"
+            else "active" if classification == "active_equity_etf"
+            else None
+        ),
+        benchmark_name=fields.get("业绩比较基准"),
     )
 
 

@@ -36,20 +36,35 @@ def create_portfolio_manager(llm):
 
     def portfolio_manager_node(state) -> dict:
         analysis_mode = state.get("analysis_mode", "stock")
+        analysis_product = state.get("analysis_product")
         instrument_profile = state.get("instrument_profile")
         instrument_context = build_instrument_context(
             state["company_of_interest"], instrument_profile
         )
         evidence_lexicon = build_evidence_lexicon(
-            analysis_mode, state.get("analysis_capabilities")
+            analysis_mode,
+            state.get("analysis_capabilities"),
+            state.get("analysis_product"),
         )
         trading_constraints = build_trading_constraints(
-            analysis_mode, instrument_profile
+            analysis_mode, instrument_profile, state.get("analysis_product")
         )
         mode_rules = (
-            "ETF decision: rely on index trend, liquidity, disclosed fund structure "
-            "and policy/news. Do not cite company financials, management, lockups, "
-            "or insider activity."
+            (
+                "Passive ETF decision: use verified tracking-index context, ETF market-price "
+                "signals, liquidity, disclosed fund structure and policy/news. Preserve a "
+                "conflicted or standalone state; do not cite company financials, management, "
+                "lockups, or insider activity."
+                if state.get("analysis_product") == "passive_equity_etf"
+                else "Active ETF decision: rely first on the ETF's own market-price, liquidity, "
+                "fund structure and policy/news evidence. An optional benchmark is context only; "
+                "do not cite mechanical tracking conclusions or company financials, management, "
+                "lockups, or insider activity."
+                if state.get("analysis_product") == "active_equity_etf"
+                else "ETF decision: rely on index trend, liquidity, disclosed fund structure "
+                "and policy/news. Do not cite company financials, management, lockups, "
+                "or insider activity."
+            )
             if analysis_mode == "etf"
             else "Stock decision: consider the applicable A-share stock constraints."
         )
@@ -58,6 +73,47 @@ def create_portfolio_manager(llm):
         risk_debate_state = state["risk_debate_state"]
         research_plan = state["investment_plan"]
         trader_plan = state["trader_investment_plan"]
+
+        # A blocked subject series is not a neutral investment opinion.  Keep
+        # the final output explicitly unavailable instead of allowing the
+        # generic five-level rating schema to turn missing evidence into
+        # Hold.  Standalone/conflicted ETF states still reach the normal
+        # synthesis path because their vehicle data remains usable.
+        technical_assessment = state.get("technical_assessment") or {}
+        if (
+            analysis_product
+            and isinstance(technical_assessment, dict)
+            and technical_assessment.get("product_state") == "unavailable"
+        ):
+            unavailable_decision = (
+                "**Rating**: Unavailable\n\n"
+                "**Executive Summary**: The subject technical series is unavailable or "
+                "blocked, so no directional portfolio rating is issued.\n\n"
+                "**Investment Thesis**: Preserve the data-quality block and rerun only "
+                "after an auditable subject snapshot is available."
+            )
+            new_risk_debate_state = {
+                "judge_decision": unavailable_decision,
+                "history": risk_debate_state.get("history", ""),
+                "aggressive_history": risk_debate_state.get("aggressive_history", ""),
+                "conservative_history": risk_debate_state.get("conservative_history", ""),
+                "neutral_history": risk_debate_state.get("neutral_history", ""),
+                "latest_speaker": "Judge",
+                "current_aggressive_response": risk_debate_state.get(
+                    "current_aggressive_response", ""
+                ),
+                "current_conservative_response": risk_debate_state.get(
+                    "current_conservative_response", ""
+                ),
+                "current_neutral_response": risk_debate_state.get(
+                    "current_neutral_response", ""
+                ),
+                "count": risk_debate_state.get("count", 0),
+            }
+            return {
+                "risk_debate_state": new_risk_debate_state,
+                "final_trade_decision": unavailable_decision,
+            }
 
         past_context = state.get("past_context", "")
         lessons_line = (

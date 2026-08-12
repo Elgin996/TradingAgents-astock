@@ -12,6 +12,29 @@ from .evidence import TechnicalEvidenceBundle
 _DATE = re.compile(r"\b\d{4}-\d{2}-\d{2}\b")
 _NUMBER = re.compile(r"(?<![A-Za-z])(?<!\d)(?:\d+(?:\.\d+)?)(?:%|\b)")
 _EXECUTIVE_TERMS = ("买入", "卖出", "强烈看多", "强烈看空", "buy", "sell")
+PRODUCT_PROHIBITED_TERMS = (
+    "折溢价",
+    "折价",
+    "溢价",
+    "跟踪误差",
+    "跟踪差异",
+    "套利机会",
+    "资金净流入",
+    "实际持仓变化",
+)
+_PRODUCT_NEGATION_CONTEXT = (
+    "不",
+    "无",
+    "未取得",
+    "未提供",
+    "不可得",
+    "不可用",
+    "不能",
+    "禁止",
+    "不输出",
+    "数据不足",
+    "关闭",
+)
 
 
 def _numeric_facts(bundle: TechnicalEvidenceBundle) -> set[float]:
@@ -88,3 +111,42 @@ def validate_report(report: str, bundle: TechnicalEvidenceBundle) -> ReportValid
 
 def validate_evidence_report(report: str, bundle: TechnicalEvidenceBundle) -> ReportValidationResult:
     return validate_report(report, bundle)
+
+
+def find_prohibited_product_terms(report: str) -> list[str]:
+    """Find unsupported ETF terminology while allowing explicit negation."""
+
+    found: list[str] = []
+    for term in PRODUCT_PROHIBITED_TERMS:
+        start = 0
+        while True:
+            index = report.find(term, start)
+            if index < 0:
+                break
+            context = report[max(0, index - 14):index]
+            if not any(marker in context for marker in _PRODUCT_NEGATION_CONTEXT):
+                found.append(term)
+            start = index + len(term)
+    return list(dict.fromkeys(found))
+
+
+def validate_product_report(report: str, bundle) -> ReportValidationResult:
+    """Validate a product evidence report without imposing legacy stock fields."""
+
+    issues: list[str] = []
+    if not report or not report.strip():
+        return ReportValidationResult(valid=False, issues=["empty_report"])
+    for term in find_prohibited_product_terms(report):
+        issues.append(f"prohibited_product_term:{term}")
+    snapshot_id = getattr(bundle, "bundle_snapshot_id", "")
+    if snapshot_id and snapshot_id not in report:
+        issues.append("missing_bundle_snapshot_id")
+    subject_quality = getattr(bundle, "subject_quality", None)
+    if subject_quality is not None and subject_quality.grade in {"C", "D", "F"}:
+        if not any(word in report for word in ("数据质量", "降级", "不可", "缺失", "observe_only", "block")):
+            issues.append("missing_quality_disclosure")
+    assessment = getattr(bundle, "product_assessment", {}) or {}
+    state = assessment.get("product_state") if isinstance(assessment, dict) else ""
+    if state == "conflicted" and any(term in report.lower() for term in ("强烈看多", "强烈看空", "strongly bullish", "strongly bearish")):
+        issues.append("conflicted_data_has_strong_direction")
+    return ReportValidationResult(valid=not issues, issues=list(dict.fromkeys(issues)))

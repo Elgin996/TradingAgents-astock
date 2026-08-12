@@ -67,6 +67,7 @@ class ProgressTracker:
     ticker: str = ""
     trade_date: str = ""
     analysis_mode: str = "stock"
+    analysis_product: str | None = None
     instrument_profile: dict[str, Any] | None = None
     analysis_capabilities: list[str] | None = None
     start_time: float = field(default_factory=time.time)

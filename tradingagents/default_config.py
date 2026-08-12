@@ -115,6 +115,10 @@ DEFAULT_CONFIG = {
     # Keep the old LLM/tool path as the default during migration. Setting this
     # true makes the market analyst consume the structured evidence renderer.
     "deterministic_technical_analysis": True,
+    # Product-aware v2 can run in shadow mode while the legacy report remains
+    # the final output.  No v2 product is promoted by default.
+    "technical_v2_shadow_mode": False,
+    "technical_v2_enabled_products": [],
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {

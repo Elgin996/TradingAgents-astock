@@ -19,6 +19,23 @@ from datetime import date, datetime, time, timedelta, timezone
 def create_market_analyst(llm):
 
     def market_analyst_node(state):
+        # Product v2 evidence is already frozen.  The LLM receives a bounded
+        # renderer output and cannot recalculate or relabel the relationship.
+        if state.get("product_technical_evidence_bundle"):
+            from tradingagents.technical.product_evidence import (
+                ProductTechnicalEvidenceBundle,
+                render_product_evidence_bundle,
+            )
+
+            product_bundle = state["product_technical_evidence_bundle"]
+            if not isinstance(product_bundle, ProductTechnicalEvidenceBundle):
+                product_bundle = ProductTechnicalEvidenceBundle.model_validate(product_bundle)
+            report = render_product_evidence_bundle(product_bundle)
+            return {
+                "messages": [AIMessage(content=report)],
+                "market_report": report,
+                "technical_assessment": product_bundle.product_assessment,
+            }
         # During migration, callers may precompute a frozen evidence bundle
         # offline. In that case the model is a renderer only and cannot select
         # indicators, calculate values, or invent price levels.
@@ -33,6 +50,105 @@ def create_market_analyst(llm):
                 "messages": [AIMessage(content=report)],
                 "market_report": report,
                 "technical_assessment": bundle.assessment.model_dump(mode="json") if bundle.assessment else None,
+            }
+        if state.get("analysis_product"):
+            from tradingagents.dataflows.analysis_bundle import (
+                fetch_analysis_market_data_bundle,
+            )
+            from tradingagents.dataflows.index_master import (
+                make_index_market_data_request,
+                resolve_index_reference,
+            )
+            from tradingagents.technical.product_evidence import (
+                build_product_evidence_bundle,
+                render_product_evidence_bundle,
+            )
+            from tradingagents.technical.products import product_required_warmup
+
+            current_date = date.fromisoformat(state["trade_date"])
+            lookback = get_config().get("market_lookback_days") or 30
+            warmup_days = 400
+            analysis_start = current_date - timedelta(days=lookback)
+            profile = state.get("instrument_profile") or {}
+            exchange = profile.get("exchange") or _a_share_exchange(state["company_of_interest"])
+            subject_request = make_market_data_request(
+                symbol=state["company_of_interest"],
+                exchange=exchange,
+                instrument_type="etf" if profile.get("security_type") == "etf" else "stock",
+                start_date=current_date - timedelta(days=warmup_days),
+                end_date=current_date,
+                adjustment="raw",
+                as_of=datetime.combine(current_date, time.min, tzinfo=timezone.utc),
+                series_variant="market_price",
+            )
+            reference_request = None
+            reference_payload = profile.get("reference_instrument")
+            if isinstance(reference_payload, dict):
+                reference_code = reference_payload.get("code") or None
+                reference_status = reference_payload.get("status")
+                # A missing active-ETF benchmark is not promoted to a frozen
+                # reference merely because its name resembles a catalog item.
+                # Passive ETF references arrive with a verified/user-supplied
+                # code; this gate keeps the same provenance rule at runtime.
+                if reference_code or reference_status in {"verified", "user_supplied"}:
+                    reference = resolve_index_reference(
+                        name=reference_payload.get("name"),
+                        code=reference_code,
+                        provider=reference_payload.get("provider") or None,
+                        series_variant=reference_payload.get("series_variant") or None,
+                        role=reference_payload.get("role", "tracking_index"),
+                        user_supplied=reference_status == "user_supplied",
+                    )
+                    if reference.status in {"verified", "user_supplied"}:
+                        try:
+                            reference_request = make_index_market_data_request(
+                                reference,
+                                start_date=current_date - timedelta(days=warmup_days),
+                                end_date=current_date,
+                                as_of=datetime.combine(current_date, time.min, tzinfo=timezone.utc),
+                            )
+                        except ValueError:
+                            reference_request = None
+            bundle = fetch_analysis_market_data_bundle(
+                subject_request,
+                reference_request=reference_request,
+                instrument_profile=profile,
+                analysis_product=state["analysis_product"],
+                min_common_observations=20,
+            )
+            product_evidence = build_product_evidence_bundle(
+                bundle,
+                unavailable_capabilities=state.get(
+                    "analysis_unavailable_capabilities", {}
+                ),
+            )
+            report = render_product_evidence_bundle(product_evidence)
+            shadow_payload = None
+            from tradingagents.technical.shadow import (
+                build_shadow_comparison,
+                shadow_mode_enabled,
+            )
+
+            if shadow_mode_enabled(get_config(), state["analysis_product"]):
+                shadow_payload = build_shadow_comparison(
+                    bundle.subject,
+                    analysis_product=state["analysis_product"],
+                    product_state=product_evidence.product_assessment.get(
+                        "product_state", "unavailable"
+                    ),
+                    bundle_snapshot_id=bundle.bundle_snapshot_id,
+                ).model_dump(mode="json")
+            return {
+                "messages": [AIMessage(content=report)],
+                "market_report": report,
+                "market_data_quality": bundle.subject.quality.model_dump(mode="json"),
+                "market_data_decision": bundle.overall_decision,
+                "market_snapshot_id": bundle.subject.snapshot_id or "",
+                "technical_assessment": product_evidence.product_assessment,
+                "technical_evidence_bundle": product_evidence.model_dump(mode="json"),
+                "product_technical_evidence_bundle": product_evidence.model_dump(mode="json"),
+                "analysis_market_data_bundle": bundle.model_dump(mode="json"),
+                "technical_shadow_comparison": shadow_payload,
             }
         if get_config().get("deterministic_technical_analysis", True):
             from tradingagents.technical.evidence import render_evidence_bundle
@@ -68,7 +184,9 @@ def create_market_analyst(llm):
             state["company_of_interest"], state.get("instrument_profile")
         )
         evidence_lexicon = build_evidence_lexicon(
-            state.get("analysis_mode", "stock"), state.get("analysis_capabilities")
+            state.get("analysis_mode", "stock"),
+            state.get("analysis_capabilities"),
+            state.get("analysis_product"),
         )
         # User-configurable analysis window (#16). None → previous default (~30).
         lookback = get_config().get("market_lookback_days") or 30

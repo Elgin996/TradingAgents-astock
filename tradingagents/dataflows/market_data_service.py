@@ -370,3 +370,42 @@ def build_technical_evidence(
         display_start=display_start,
     )
     return result, bundle
+
+
+def build_product_technical_evidence(
+    subject_request: MarketDataRequest,
+    *,
+    reference_request: MarketDataRequest | None = None,
+    instrument_profile: dict | None = None,
+    analysis_product: str = "a_share_stock",
+    mode: str = "online",
+    service: MarketDataService | None = None,
+    subject_snapshot_id: str | None = None,
+    reference_snapshot_id: str | None = None,
+    unavailable_capabilities: dict[str, str] | None = None,
+):
+    """Fetch a v2 multi-series bundle and construct its evidence package."""
+
+    from tradingagents.dataflows.analysis_bundle import fetch_analysis_market_data_bundle
+    from tradingagents.technical.product_evidence import build_product_evidence_bundle
+    from tradingagents.technical.products import product_required_warmup
+
+    subject_warmup = product_required_warmup(analysis_product)
+    reference_warmup = product_required_warmup("index") if reference_request else None
+    bundle = fetch_analysis_market_data_bundle(
+        subject_request,
+        reference_request=reference_request,
+        instrument_profile=instrument_profile,
+        analysis_product=analysis_product,
+        service=service,
+        mode=mode,
+        subject_snapshot_id=subject_snapshot_id,
+        reference_snapshot_id=reference_snapshot_id,
+        subject_required_warmup=subject_warmup,
+        reference_required_warmup=reference_warmup,
+    )
+    evidence = build_product_evidence_bundle(
+        bundle,
+        unavailable_capabilities=unavailable_capabilities,
+    )
+    return bundle, evidence

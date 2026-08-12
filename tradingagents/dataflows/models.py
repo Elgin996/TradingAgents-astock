@@ -18,6 +18,13 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 
 
 Adjustment = Literal["raw", "forward", "backward", "unknown"]
+SeriesVariant = Literal[
+    "market_price",
+    "price",
+    "total_return",
+    "net_total_return",
+    "unknown",
+]
 QualityGrade = Literal["A", "B", "C", "D", "F"]
 QualityDecision = Literal["allow", "observe_only", "block"]
 SourceAttemptStatus = Literal[
@@ -40,6 +47,33 @@ class ContractModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
+class ReferenceInstrument(ContractModel):
+    """A provider-qualified, auditable reference relationship.
+
+    ``code`` is intentionally allowed to be empty for a frozen but unresolved
+    relationship.  That state is represented by ``status=missing`` rather
+    than by guessing a code from a product name.
+    """
+
+    role: Literal["tracking_index", "benchmark"]
+    code: str = ""
+    name: str = ""
+    provider: str = ""
+    series_variant: SeriesVariant = "unknown"
+    source: str = ""
+    status: Literal["verified", "user_supplied", "ambiguous", "missing"] = "missing"
+    verified_at: str = ""
+    instrument_id: str | None = None
+
+    @model_validator(mode="after")
+    def validate_resolved_identity(self) -> "ReferenceInstrument":
+        if self.status in {"verified", "user_supplied"} and (
+            not self.code.strip() or not self.provider.strip()
+        ):
+            raise ValueError("resolved reference instruments require code and provider")
+        return self
+
+
 class MarketDataRequest(ContractModel):
     symbol: str = Field(min_length=1)
     exchange: Literal["SSE", "SZSE", "BSE"]
@@ -49,6 +83,9 @@ class MarketDataRequest(ContractModel):
     frequency: Literal["1d"] = "1d"
     adjustment: Literal["raw", "forward", "backward"]
     as_of: datetime
+    series_variant: SeriesVariant = "unknown"
+    currency: str = "CNY"
+    timezone: str = "Asia/Shanghai"
 
     @field_validator("symbol")
     @classmethod
@@ -146,6 +183,52 @@ class MarketDataResult(ContractModel):
     raw_responses: dict[str, Any] = Field(default_factory=dict)
 
 
+class SeriesAlignmentReport(ContractModel):
+    """Date and semantic alignment facts for two independently fetched series."""
+
+    start_date: date | None = None
+    end_date: date | None = None
+    subject_observations: int = Field(default=0, ge=0)
+    reference_observations: int = Field(default=0, ge=0)
+    common_observations: int = Field(default=0, ge=0)
+    common_coverage: float = Field(default=0.0, ge=0.0, le=1.0)
+    subject_only_dates: list[date] = Field(default_factory=list)
+    reference_only_dates: list[date] = Field(default_factory=list)
+    subject_series_variant: str = "unknown"
+    reference_series_variant: str = "unknown"
+    decision: QualityDecision = "block"
+    flags: list[str] = Field(default_factory=list)
+
+
+class AnalysisMarketDataBundle(ContractModel):
+    """Independent subject/reference data plus their reproducible alignment."""
+
+    subject: MarketDataResult
+    reference: MarketDataResult | None = None
+    alignment: SeriesAlignmentReport | None = None
+    bundle_snapshot_id: str
+    overall_decision: QualityDecision = "block"
+    flags: list[str] = Field(default_factory=list)
+    analysis_product: str = "a_share_stock"
+    instrument_profile: dict[str, Any] = Field(default_factory=dict)
+    versions: dict[str, str] = Field(default_factory=dict)
+
+
+class RelativeMetric(ContractModel):
+    """One cross-series metric with explicit semantics and provenance."""
+
+    metric_id: str
+    value: float | None = None
+    window: int | None = None
+    as_of: date
+    subject_snapshot_id: str
+    reference_snapshot_id: str
+    common_observations: int = Field(default=0, ge=0)
+    status: Literal["ok", "insufficient", "blocked"] = "blocked"
+    semantics: str
+    rule_version: str
+
+
 class VendorCapabilities(ContractModel):
     instrument_types: set[str] = Field(default_factory=lambda: {"stock"})
     frequencies: set[str] = Field(default_factory=lambda: {"1d"})
@@ -200,4 +283,3 @@ class ReportValidationResult(ContractModel):
     valid: bool
     issues: list[str] = Field(default_factory=list)
     cited_evidence_ids: list[str] = Field(default_factory=list)
-

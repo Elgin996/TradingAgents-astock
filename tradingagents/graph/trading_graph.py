@@ -229,6 +229,7 @@ class TradingAgentsGraph:
         self.curr_state = None
         self.ticker = None
         self.analysis_mode = "stock"
+        self.analysis_product = None
         self.instrument_profile = None
         self.analysis_capabilities: list[str] = []
         self.analysis_unavailable_capabilities: dict[str, str] = {}
@@ -659,6 +660,7 @@ class TradingAgentsGraph:
         trade_date,
         *,
         analysis_mode: str = "stock",
+        analysis_product: Optional[str] = None,
         instrument_profile: Optional[Dict[str, Any]] = None,
     ):
         """Run the trading agents graph for a company on a specific date.
@@ -671,6 +673,7 @@ class TradingAgentsGraph:
             company_name,
             trade_date,
             analysis_mode=analysis_mode,
+            analysis_product=analysis_product,
             instrument_profile=instrument_profile,
         )
 
@@ -680,6 +683,7 @@ class TradingAgentsGraph:
         trade_date,
         callbacks: Optional[List] = None,
         analysis_mode: str = "stock",
+        analysis_product: Optional[str] = None,
         instrument_profile: Optional[Dict[str, Any]] = None,
         unavailable_capabilities: Optional[Dict[str, str]] = None,
     ) -> Tuple[Optional[Dict[str, Any]], Dict[str, Any], Optional[int]]:
@@ -689,8 +693,19 @@ class TradingAgentsGraph:
         already exists, ``initial_state`` is ``None`` so LangGraph resumes the
         existing thread instead of replaying completed nodes.
         """
+        if analysis_product is None and isinstance(instrument_profile, dict):
+            candidate = instrument_profile.get("analysis_product")
+            if candidate in {
+                "a_share_stock",
+                "passive_equity_etf",
+                "active_equity_etf",
+            }:
+                analysis_product = candidate
+        if analysis_product in {"passive_equity_etf", "active_equity_etf"}:
+            analysis_mode = "etf"
         self.ticker = company_name
         self.analysis_mode = analysis_mode
+        self.analysis_product = analysis_product
         self.instrument_profile = instrument_profile
         from tradingagents.dataflows.analysis_capabilities import AnalysisCapabilities
 
@@ -701,7 +716,10 @@ class TradingAgentsGraph:
                 company_name, str(trade_date)
             )
         capability_model = AnalysisCapabilities.for_instrument(
-            instrument_profile, analysis_mode, unavailable_capabilities
+            instrument_profile,
+            analysis_mode,
+            unavailable_capabilities,
+            analysis_product=analysis_product,
         )
         self.analysis_capabilities = capability_model.to_list()
         self.analysis_unavailable_capabilities = capability_model.unavailable
@@ -716,7 +734,9 @@ class TradingAgentsGraph:
                     "请检查行情/基金资料数据源后重试。"
                 )
             self.workflow = self.graph_setup.setup_graph(
-                selected, analysis_mode=analysis_mode
+                selected,
+                analysis_mode=analysis_mode,
+                analysis_product=analysis_product,
             )
             self.graph = self.workflow.compile()
 
@@ -725,6 +745,11 @@ class TradingAgentsGraph:
 
         checkpoint_enabled = self.config.get("checkpoint_enabled")
         resume_step = None
+        report_schema_version = (
+            f"{analysis_product}-v2"
+            if analysis_product
+            else ("etf-v1.3" if analysis_mode == "etf" else "stock-v1")
+        )
 
         # Recompile with a checkpointer if the user opted in.
         if checkpoint_enabled:
@@ -739,6 +764,7 @@ class TradingAgentsGraph:
                 company_name,
                 str(trade_date),
                 analysis_mode,
+                report_schema_version,
             )
             if resume_step is not None:
                 logger.info(
@@ -754,7 +780,12 @@ class TradingAgentsGraph:
 
         # Inject thread_id so same ticker+date resumes, different date starts fresh.
         if checkpoint_enabled:
-            tid = thread_id(company_name, str(trade_date), analysis_mode)
+            tid = thread_id(
+                company_name,
+                str(trade_date),
+                analysis_mode,
+                report_schema_version,
+            )
             args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
 
         if checkpoint_enabled and resume_step is not None:
@@ -777,6 +808,7 @@ class TradingAgentsGraph:
             trade_date,
             past_context=past_context,
             analysis_mode=analysis_mode,
+            analysis_product=analysis_product,
             instrument_profile=instrument_profile,
             analysis_capabilities=self.analysis_capabilities,
             analysis_unavailable_capabilities=self.analysis_unavailable_capabilities,
@@ -828,6 +860,7 @@ class TradingAgentsGraph:
                 company_name,
                 str(trade_date),
                 self.analysis_mode,
+                final_state.get("report_schema_version"),
             )
 
         return self.process_signal(decision)
@@ -845,6 +878,7 @@ class TradingAgentsGraph:
         trade_date,
         *,
         analysis_mode: str = "stock",
+        analysis_product: Optional[str] = None,
         instrument_profile: Optional[Dict[str, Any]] = None,
     ):
         """Execute the graph and write the resulting state to disk and memory log."""
@@ -855,14 +889,21 @@ class TradingAgentsGraph:
             set_active_capabilities,
         )
 
+        effective_analysis_mode = (
+            "etf"
+            if analysis_product in {"passive_equity_etf", "active_equity_etf"}
+            else analysis_mode
+        )
+
         init_agent_state, args, _ = self.prepare_graph_run(
             company_name,
             trade_date,
-            analysis_mode=analysis_mode,
+            analysis_mode=effective_analysis_mode,
+            analysis_product=analysis_product,
             instrument_profile=instrument_profile,
         )
         token = set_active_capabilities(
-            self.analysis_capabilities if analysis_mode == "etf" else None
+            self.analysis_capabilities if effective_analysis_mode == "etf" else None
         )
         date_token = set_active_analysis_date(str(trade_date))
 
@@ -901,6 +942,9 @@ class TradingAgentsGraph:
             "company_of_interest": final_state.get("company_of_interest", ""),
             "trade_date": final_state.get("trade_date", str(trade_date)),
             "analysis_mode": final_state.get("analysis_mode", self.analysis_mode),
+            "analysis_product": final_state.get(
+                "analysis_product", self.analysis_product
+            ),
             "analysis_capabilities": final_state.get(
                 "analysis_capabilities", self.analysis_capabilities
             ),
@@ -910,7 +954,11 @@ class TradingAgentsGraph:
             ),
             "report_schema_version": final_state.get(
                 "report_schema_version",
-                "etf-v1.3" if self.analysis_mode == "etf" else "stock-v1",
+                (
+                    f"{self.analysis_product}-v2"
+                    if self.analysis_product
+                    else "etf-v1.3" if self.analysis_mode == "etf" else "stock-v1"
+                ),
             ),
             "data_quality_summary": final_state.get("data_quality_summary", ""),
             "data_quality_failed": bool(
@@ -921,6 +969,15 @@ class TradingAgentsGraph:
             "market_snapshot_id": final_state.get("market_snapshot_id", ""),
             "technical_assessment": final_state.get("technical_assessment", {}),
             "technical_evidence_bundle": final_state.get("technical_evidence_bundle", {}),
+            "analysis_market_data_bundle": final_state.get(
+                "analysis_market_data_bundle", {}
+            ),
+            "product_technical_evidence_bundle": final_state.get(
+                "product_technical_evidence_bundle", {}
+            ),
+            "technical_shadow_comparison": final_state.get(
+                "technical_shadow_comparison"
+            ),
             "instrument_profile": final_state.get(
                 "instrument_profile", self.instrument_profile
             ),

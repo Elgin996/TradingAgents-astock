@@ -24,12 +24,13 @@ class Propagator:
         trade_date: str,
         past_context: str = "",
         analysis_mode: str = "stock",
+        analysis_product: Optional[str] = None,
         instrument_profile: Optional[Dict[str, Any]] = None,
         analysis_capabilities: Optional[List[str]] = None,
         analysis_unavailable_capabilities: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Create the initial state for the agent graph."""
-        return {
+        state = {
             "messages": [("human", company_name)],
             "company_of_interest": company_name,
             "trade_date": str(trade_date),
@@ -71,6 +72,10 @@ class Propagator:
             "hot_money_report": "",
             "lockup_report": "",
         }
+        if analysis_product is not None:
+            state["analysis_product"] = analysis_product
+            state["report_schema_version"] = f"{analysis_product}-v2"
+        return state
 
     def get_graph_args(self, callbacks: Optional[List] = None) -> Dict[str, Any]:
         """Get arguments for the graph invocation.

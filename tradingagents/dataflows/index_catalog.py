@@ -1,109 +1,72 @@
-"""Curated tracking-index code catalog for domestic equity ETF recognition.
+"""Backward-compatible façade for the strict v2 index master.
 
-Eastmoney fund profiles publish tracking-index *names* but not provider-qualified
-codes. This table fills that gap for common indices with an auditable local
-source label (``catalog``), so the UI can pre-fill codes without pretending the
-code came from Eastmoney master data. Frozen historical tasks are never rewritten.
+Older callers still import ``lookup_tracking_index_code``.  They now receive
+the same exact-match behavior as the provider-qualified v2 directory; the
+former substring fallback has intentionally been removed.
 """
 
 from __future__ import annotations
 
-import re
-
-# Normalized index token -> (code, provider). Keep only codes that the project's
-# A-share OHLCV loaders can route (6-digit SSE/SZSE index codes).
-_INDEX_CATALOG: dict[str, tuple[str, str]] = {
-    "沪深300": ("000300", "CSI"),
-    "中证500": ("000905", "CSI"),
-    "中证1000": ("000852", "CSI"),
-    "中证800": ("000906", "CSI"),
-    "中证A500": ("000510", "CSI"),
-    "上证50": ("000016", "SSE"),
-    "上证180": ("000010", "SSE"),
-    "上证科创板50成份": ("000688", "SSE"),
-    "科创50": ("000688", "SSE"),
-    "科创板50": ("000688", "SSE"),
-    "创业板": ("399006", "SZSE"),
-    "创业板指": ("399006", "SZSE"),
-    "深证成指": ("399001", "SZSE"),
-    "深证成份": ("399001", "SZSE"),
-    "中小板指": ("399005", "SZSE"),
-    "中证银行": ("399986", "CSI"),
-    "中证白酒": ("399997", "CSI"),
-    "中证医药": ("399989", "CSI"),
-    "中证红利": ("000922", "CSI"),
-    "上证红利": ("000015", "SSE"),
-}
-
-
-def _provider_prefix(code: str, provider: str) -> str:
-    if code.startswith("399") or provider == "SZSE":
-        return "sz"
-    return "sh"
-
-
-# code -> sh/sz. Must stay in sync with catalog values (asserted in tests).
-INDEX_EXCHANGE_BY_CODE: dict[str, str] = {
-    code: _provider_prefix(code, provider)
-    for code, provider in {pair for pair in _INDEX_CATALOG.values()}
-}
-
-_NOISE = re.compile(
-    r"(价格指数|全收益指数|净收益指数|指数|收益率)$"
+from .index_master import (
+    IndexCatalogRecord,
+    load_index_catalog,
+    lookup_index_by_code,
+    match_index_name,
+    normalize_index_name,
 )
-_PRICE_PAREN = re.compile(r"[（(]价格[)）]")
 
 
 def normalize_tracking_index_name(name: str) -> str:
-    """Collapse a fund-profile tracking label into a catalog lookup token."""
-    text = name.strip()
-    text = _PRICE_PAREN.sub("", text)
-    text = _NOISE.sub("", text).strip()
-    return text or name.strip()
+    return normalize_index_name(name)
 
 
 def lookup_tracking_index_code(tracking_index_name: str | None) -> tuple[str, str] | None:
-    """Return ``(code, provider)`` when the tracking-index name is in the catalog."""
-    if not tracking_index_name:
-        return None
-    token = normalize_tracking_index_name(tracking_index_name)
-    hit = _INDEX_CATALOG.get(token)
-    if hit:
-        return hit
-    # Secondary pass: allow names that still contain a known catalog key.
-    for key, value in _INDEX_CATALOG.items():
-        if key and key in token:
-            return value
+    matches = match_index_name(tracking_index_name)
+    if len(matches) == 1:
+        record = matches[0]
+        return record.code, record.provider
     return None
 
 
 def infer_tracking_index_provider(
     code: str, tracking_index_name: str | None = None
 ) -> str:
-    """Infer an index publisher without making it a required user input.
+    """Infer a provider only from an exact directory code or explicit label.
 
-    Prefer an exact catalog code match.  For indices outside the small local
-    catalog, well-known publisher prefixes in the disclosed index name provide
-    a useful attribution; otherwise keep the provenance explicitly unknown.
+    For an outside-directory code, the name prefix is retained as a clearly
+    non-frozen attribution hint for legacy UI display.  It is not used by the
+    v2 request builder to route an index series.
     """
-    normalized_code = code.strip()
-    catalog_providers = {
-        provider
-        for catalog_code, provider in _INDEX_CATALOG.values()
-        if catalog_code == normalized_code
-    }
-    if len(catalog_providers) == 1:
-        return next(iter(catalog_providers))
 
+    record = lookup_index_by_code(code)
+    if record is not None:
+        return record.provider
     name = (tracking_index_name or "").strip()
-    provider_prefixes = (
+    for prefix, provider in (
         ("中证", "CSI"),
         ("上证", "SSE"),
         ("深证", "SZSE"),
         ("创业板", "SZSE"),
         ("国证", "CNI"),
-    )
-    for prefix, provider in provider_prefixes:
+    ):
         if prefix in name:
             return provider
     return "UNKNOWN"
+
+
+_CATALOG = load_index_catalog()
+INDEX_EXCHANGE_BY_CODE: dict[str, str] = {
+    record.code: {"sh": "sh", "sz": "sz", "bj": "bj"}[record.exchange_route]
+    for record in _CATALOG.records
+}
+
+# Legacy tests/integrations used this private mapping to inspect the catalog.
+# Keep one canonical-name entry per record; aliases are resolved by the v2
+# matcher and are intentionally not duplicated here.
+_INDEX_CATALOG: dict[str, tuple[str, str]] = {
+    record.name: (record.code, record.provider) for record in _CATALOG.records
+}
+
+# Kept for integrations that introspect the old module-level mapping.  It is
+# generated from the versioned file rather than maintained independently.
+INDEX_CATALOG: tuple[IndexCatalogRecord, ...] = _CATALOG.records

@@ -126,10 +126,50 @@ def render_report(
         )
     if final_state.get("analysis_mode") == "etf":
         profile = final_state.get("instrument_profile") or {}
+        analysis_product = final_state.get("analysis_product") or profile.get(
+            "analysis_product", "passive_equity_etf"
+        )
+        product_label = {
+            "passive_equity_etf": "被动股票指数 ETF",
+            "active_equity_etf": "主动股票 ETF",
+        }.get(analysis_product, "境内股票 ETF")
+        reference_payload = profile.get("reference_instrument") or {}
+        reference_name = (
+            reference_payload.get("name")
+            if isinstance(reference_payload, dict)
+            else None
+        ) or profile.get("tracking_index_name") or "未提供"
+        reference_label = "比较基准" if analysis_product == "active_equity_etf" else "跟踪指数"
         st.caption(
-            f"境内股票 ETF · 跟踪指数：{profile.get('tracking_index_name', '未提供')} · "
+            f"{product_label} · {reference_label}：{reference_name} · "
             f"能力：{', '.join(final_state.get('analysis_capabilities', []))}"
         )
+        product_bundle = final_state.get("product_technical_evidence_bundle") or {}
+        if product_bundle:
+            assessment = product_bundle.get("product_assessment") or {}
+            alignment = product_bundle.get("alignment") or {}
+            st.info(
+                "产品状态："
+                f"{assessment.get('product_state', 'unavailable')} · "
+                f"主体：{assessment.get('subject_stance', 'unavailable')} · "
+                f"参考：{assessment.get('reference_stance', 'unavailable')} · "
+                f"关系：{assessment.get('alignment_state', 'unavailable')} · "
+                f"组合快照：{final_state.get('analysis_market_data_bundle', {}).get('bundle_snapshot_id', 'unavailable')}"
+            )
+            if alignment:
+                st.caption(
+                    "共同观察："
+                    f"{alignment.get('common_observations', 0)} / "
+                    f"coverage={alignment.get('common_coverage', 0)}"
+                )
+        shadow = final_state.get("technical_shadow_comparison") or {}
+        if shadow:
+            st.caption(
+                "Shadow v1/v2："
+                f"v1={shadow.get('legacy_stance', 'unavailable')} · "
+                f"v2={shadow.get('v2_state', 'unavailable')} · "
+                f"翻转={'是' if shadow.get('stance_flipped') else '否'}"
+            )
         unavailable = final_state.get("analysis_unavailable_capabilities") or {}
         if unavailable:
             st.caption(

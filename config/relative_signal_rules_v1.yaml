@@ -1,0 +1,12 @@
+version: relative-signal-rules-v1
+min_common_observations: 20
+min_coverage: 0.8
+windows: [20, 60]
+semantics:
+  market_price_return_difference: 市场价格收益差
+  rolling_return_correlation: 价格路径滚动相关
+  rolling_return_beta: 市场价格收益敏感度
+  normalized_relative_strength: 归一化相对强弱
+  market_price_return_difference_volatility: 市场价格收益差波动
+  direction_consistency_rate: 共同交易日方向一致率
+  technical_state_consistency: 技术状态一致性

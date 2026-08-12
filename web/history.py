@@ -49,8 +49,9 @@ def _load_state(path: str | Path, date: str) -> dict[str, Any]:
 def get_history() -> list[dict[str, str]]:
     """Scan saved analysis logs and return a sorted list (newest first).
 
-    Each entry: {"ticker", "date", "path", optional "analysis_mode",
-    "instrument_profile"} when present in the saved state.
+    Each entry: {"ticker", "date", "path", optional product identity and
+    snapshot fields} when present in the saved state. Legacy logs remain
+    readable and are not reclassified.
     """
     root = _results_dir()
     if not root.exists():
@@ -67,8 +68,16 @@ def get_history() -> list[dict[str, str]]:
         try:
             state = _load_state(log_file, date)
             entry["analysis_mode"] = state.get("analysis_mode", "stock")
-            if state.get("instrument_profile"):
-                entry["instrument_profile"] = state.get("instrument_profile")
+            for key in (
+                "analysis_product",
+                "instrument_profile",
+                "market_snapshot_id",
+                "analysis_market_data_bundle",
+                "product_technical_evidence_bundle",
+                "technical_shadow_comparison",
+            ):
+                if state.get(key):
+                    entry[key] = state.get(key)
         except (OSError, json.JSONDecodeError, TypeError):
             entry["analysis_mode"] = "stock"
         entries.append(entry)
@@ -82,9 +91,12 @@ def _completed_key(ticker: str, trade_date: str) -> tuple[str, str]:
 
 
 def _incomplete_key(
-    ticker: str, trade_date: str, analysis_mode: str = "stock"
-) -> tuple[str, str, str]:
-    return ticker.upper(), trade_date, analysis_mode
+    ticker: str,
+    trade_date: str,
+    analysis_mode: str = "stock",
+    analysis_product: str | None = None,
+) -> tuple[str, str, str, str]:
+    return ticker.upper(), trade_date, analysis_mode, analysis_product or "legacy"
 
 
 def _completed_keys() -> set[tuple[str, str]]:
@@ -171,13 +183,20 @@ def _save_incomplete_index(entries: list[dict[str, Any]]) -> None:
 
 
 def _checkpoint_step(
-    ticker: str, trade_date: str, analysis_mode: str = "stock"
+    ticker: str,
+    trade_date: str,
+    analysis_mode: str = "stock",
+    analysis_product: str | None = None,
 ) -> int | None:
     try:
         from tradingagents.graph.checkpointer import checkpoint_step
 
         return checkpoint_step(
-            DEFAULT_CONFIG["data_cache_dir"], ticker, trade_date, analysis_mode
+            DEFAULT_CONFIG["data_cache_dir"],
+            ticker,
+            trade_date,
+            analysis_mode,
+            report_schema_version=(f"{analysis_product}-v2" if analysis_product else None),
         )
     except Exception:
         return None
@@ -191,6 +210,7 @@ def record_incomplete_task(
     error: str | None = None,
     completed_stages: list[str] | None = None,
     analysis_mode: str = "stock",
+    analysis_product: str | None = None,
     instrument_profile: dict[str, Any] | None = None,
 ) -> None:
     """Upsert a resumable task entry."""
@@ -207,28 +227,33 @@ def record_incomplete_task(
                 entry["ticker"],
                 entry["trade_date"],
                 entry.get("analysis_mode", "stock"),
+                entry.get("analysis_product"),
             )
-            != _incomplete_key(ticker, trade_date, analysis_mode)
+            != _incomplete_key(ticker, trade_date, analysis_mode, analysis_product)
         ]
         now = time.time()
-        entries.append(
-            {
-                "ticker": ticker,
-                "trade_date": trade_date,
-                "status": status,
-                "error": error or "",
-                "completed_stages": completed_stages or [],
-                "analysis_mode": analysis_mode,
-                "instrument_profile": instrument_profile,
-                "updated_at": now,
-            }
-        )
+        entry = {
+            "ticker": ticker,
+            "trade_date": trade_date,
+            "status": status,
+            "error": error or "",
+            "completed_stages": completed_stages or [],
+            "analysis_mode": analysis_mode,
+            "instrument_profile": instrument_profile,
+            "updated_at": now,
+        }
+        if analysis_product is not None:
+            entry["analysis_product"] = analysis_product
+        entries.append(entry)
         entries.sort(key=lambda e: float(e.get("updated_at", 0)), reverse=True)
         _save_incomplete_index(entries)
 
 
 def clear_incomplete_task(
-    ticker: str, trade_date: str, analysis_mode: str = "stock"
+    ticker: str,
+    trade_date: str,
+    analysis_mode: str = "stock",
+    analysis_product: str | None = None,
 ) -> None:
     """Remove an incomplete task once it completes successfully."""
     ticker = ticker.strip().upper()
@@ -241,8 +266,9 @@ def clear_incomplete_task(
                 entry["ticker"],
                 entry["trade_date"],
                 entry.get("analysis_mode", "stock"),
+                entry.get("analysis_product"),
             )
-            != _incomplete_key(ticker, trade_date, analysis_mode)
+            != _incomplete_key(ticker, trade_date, analysis_mode, analysis_product)
         ]
         _save_incomplete_index(entries)
 
@@ -259,11 +285,22 @@ def get_incomplete_history() -> list[dict[str, Any]]:
             if key in completed:
                 continue
 
-            step = _checkpoint_step(
-                entry["ticker"],
-                entry["trade_date"],
-                entry.get("analysis_mode", "stock"),
-            )
+            product = entry.get("analysis_product")
+            if product:
+                step = _checkpoint_step(
+                    entry["ticker"],
+                    entry["trade_date"],
+                    entry.get("analysis_mode", "stock"),
+                    product,
+                )
+            else:
+                # Preserve compatibility with callers/tests that provide the
+                # legacy three-argument checkpoint helper.
+                step = _checkpoint_step(
+                    entry["ticker"],
+                    entry["trade_date"],
+                    entry.get("analysis_mode", "stock"),
+                )
             entry["checkpoint_step"] = step
             active_entries.append(entry)
 

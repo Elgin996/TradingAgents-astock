@@ -16,8 +16,16 @@ def create_aggressive_debator(llm):
 
         trader_decision = state["trader_investment_plan"]
         instrument_context = build_instrument_context(state["company_of_interest"], state.get("instrument_profile"))
-        evidence_lexicon = build_evidence_lexicon(state.get("analysis_mode", "stock"), state.get("analysis_capabilities"))
-        risk_framework = build_risk_framework(state.get("analysis_mode", "stock"), "aggressive")
+        evidence_lexicon = build_evidence_lexicon(
+            state.get("analysis_mode", "stock"),
+            state.get("analysis_capabilities"),
+            state.get("analysis_product"),
+        )
+        risk_framework = build_risk_framework(
+            state.get("analysis_mode", "stock"),
+            "aggressive",
+            state.get("analysis_product"),
+        )
         report_context = build_analysis_report_context(state)
 
         prompt = f"""As the Aggressive Risk Analyst, champion high-reward opportunities with instrument-appropriate evidence. Counter the conservative and neutral analysts with data-driven rebuttals.

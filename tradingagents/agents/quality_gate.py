@@ -299,7 +299,12 @@ def _build_review_prompt(
 """
 
 
-def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock"):
+def create_quality_gate(
+    llm,
+    selected_analysts=None,
+    analysis_mode: str = "stock",
+    analysis_product: str | None = None,
+):
     """Factory for the data quality gate node.
 
     Sits between the last analyst Msg Clear and Bull Researcher.
@@ -321,8 +326,12 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
         market_quality_result = evaluate_market_data_quality(state.get("market_data_quality"))
         evidence_validation = None
         capabilities = state.get("analysis_capabilities")
-        missing_tracking_code = analysis_mode == "etf" and not _tracking_index_code(
-            state.get("instrument_profile")
+        missing_tracking_code = (
+            (
+                analysis_product == "passive_equity_etf"
+                or (analysis_product is None and analysis_mode == "etf")
+            )
+            and not _tracking_index_code(state.get("instrument_profile"))
         )
         if missing_tracking_code:
             unavailable.setdefault(
@@ -337,12 +346,31 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
             )
 
             enabled = frozenset(capabilities)
+            # v2 stores product-specific capability names while the legacy
+            # analyst/report maps still use the phase-1 names.  Keep the
+            # quality gate aligned with the graph's analyst resolver during
+            # the migration window instead of silently dropping every v2 ETF
+            # report field.
+            compatibility = {
+                "price_history": "subject_price_history",
+                "technical_indicators": "subject_price_indicators",
+                "liquidity_metrics": "etf_liquidity_metrics",
+                "fund_profile": "fund_profile",
+                "index_news_policy": "tracking_index_identity",
+                "peer_comparison": "peer_comparison",
+            }
+
+            def capabilities_cover(required: frozenset[str]) -> bool:
+                return required.issubset(enabled) or all(
+                    compatibility.get(item, item) in enabled for item in required
+                )
+
             fields = {
                 analyst: field
                 for analyst, field in base_fields.items()
-                if ETF_ANALYST_REQUIRED_CAPABILITIES.get(
-                    analyst, frozenset()
-                ).issubset(enabled)
+                if capabilities_cover(
+                    ETF_ANALYST_REQUIRED_CAPABILITIES.get(analyst, frozenset())
+                )
             }
         threshold = _fail_threshold(len(fields)) if fields else 2
 
@@ -350,15 +378,23 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
         for analyst_type, field in fields.items():
             reports[field] = state.get(field, "")
 
-        evidence_bundle = state.get("technical_evidence_bundle")
+        evidence_bundle = state.get("product_technical_evidence_bundle") or state.get("technical_evidence_bundle")
         if evidence_bundle and reports.get("market_report"):
             try:
-                from tradingagents.technical.evidence import TechnicalEvidenceBundle
-                from tradingagents.technical.report_validation import validate_report
+                if analysis_product:
+                    from tradingagents.technical.product_evidence import ProductTechnicalEvidenceBundle
+                    from tradingagents.technical.report_validation import validate_product_report
 
-                if not isinstance(evidence_bundle, TechnicalEvidenceBundle):
-                    evidence_bundle = TechnicalEvidenceBundle.model_validate(evidence_bundle)
-                evidence_validation = validate_report(reports["market_report"], evidence_bundle)
+                    if not isinstance(evidence_bundle, ProductTechnicalEvidenceBundle):
+                        evidence_bundle = ProductTechnicalEvidenceBundle.model_validate(evidence_bundle)
+                    evidence_validation = validate_product_report(reports["market_report"], evidence_bundle)
+                else:
+                    from tradingagents.technical.evidence import TechnicalEvidenceBundle
+                    from tradingagents.technical.report_validation import validate_report
+
+                    if not isinstance(evidence_bundle, TechnicalEvidenceBundle):
+                        evidence_bundle = TechnicalEvidenceBundle.model_validate(evidence_bundle)
+                    evidence_validation = validate_report(reports["market_report"], evidence_bundle)
             except Exception as exc:
                 evidence_validation = {"valid": False, "issues": [f"validator_error:{type(exc).__name__}"]}
         evidence_failed = bool(evidence_validation is not None and not (

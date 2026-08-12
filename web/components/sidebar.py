@@ -60,6 +60,11 @@ def _history_mode_badge(entry: dict[str, Any]) -> str:
     """Compact mode badge for history / incomplete task rows."""
     mode = entry.get("analysis_mode") or "stock"
     if mode == "etf":
+        product = entry.get("analysis_product")
+        if product == "active_equity_etf":
+            return "[主动ETF]"
+        if product == "passive_equity_etf":
+            return "[被动ETF]"
         return "[ETF]"
     return "[个股]"
 
@@ -131,10 +136,11 @@ def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, 
     except Exception as exc:
         return "unknown", None, f"证券主数据暂不可用，请重试：{exc}"
 
-    if record.classification == "domestic_equity_etf":
+    if record.classification in {"domestic_equity_etf", "active_equity_etf"}:
         from tradingagents.dataflows.instrument import profile_from_fund_master
 
-        return "etf", profile_from_fund_master(record).to_dict(), None
+        profile = profile_from_fund_master(record).to_dict()
+        return "etf", profile, None
     if record.classification == "unsupported_fund":
         return "unsupported", None, f"当前版本不支持该类型：{record.classification_reason}"
     # "not_a_fund": the Eastmoney fund-profile page returned placeholder
@@ -191,15 +197,32 @@ def _apply_user_tracking_index(
         status="ok",
         notes="user_supplied",
     ).to_dict()
+    from tradingagents.dataflows.index_master import resolve_index_reference
+
+    reference = resolve_index_reference(
+        name=frozen.get("tracking_index_name"),
+        code=updated.tracking_index_code,
+        provider=updated.tracking_index_provider,
+        role="tracking_index",
+        user_supplied=True,
+    )
+    frozen["reference_instrument"] = reference.model_dump(mode="json")
     return frozen, None
 
 
 def _clear_analysis_artifacts(
-    ticker: str, trade_date: str, analysis_mode: str = "stock"
+    ticker: str,
+    trade_date: str,
+    analysis_mode: str = "stock",
+    analysis_product: str | None = None,
 ) -> None:
-    clear_incomplete_task(ticker, trade_date, analysis_mode)
+    clear_incomplete_task(ticker, trade_date, analysis_mode, analysis_product)
     clear_checkpoint(
-        DEFAULT_CONFIG["data_cache_dir"], ticker, trade_date, analysis_mode
+        DEFAULT_CONFIG["data_cache_dir"],
+        ticker,
+        trade_date,
+        analysis_mode,
+        f"{analysis_product}-v2" if analysis_product else None,
     )
 
 
@@ -232,6 +255,7 @@ def _render_analysis_controls(raw_ticker: str, trade_date_value: date) -> None:
                 status="paused",
                 completed_stages=tracker.completed_stages,
                 analysis_mode=tracker.analysis_mode,
+                analysis_product=tracker.analysis_product,
                 instrument_profile=tracker.instrument_profile,
             )
         st.rerun()
@@ -250,6 +274,7 @@ def _render_analysis_controls(raw_ticker: str, trade_date_value: date) -> None:
                 status="running",
                 completed_stages=tracker.completed_stages,
                 analysis_mode=tracker.analysis_mode,
+                analysis_product=tracker.analysis_product,
                 instrument_profile=tracker.instrument_profile,
             )
         st.rerun()
@@ -287,6 +312,7 @@ def _render_analysis_controls(raw_ticker: str, trade_date_value: date) -> None:
                 target_ticker,
                 target_date,
                 tracker.analysis_mode if tracker is not None else "stock",
+                tracker.analysis_product if tracker is not None else None,
             )
 
         st.session_state["viewing_history"] = None
@@ -490,6 +516,7 @@ def render_sidebar() -> None:
     is_stopping = is_busy and tracker.stop_requested
     resolved_code, input_error = _resolve_user_input(ticker) if ticker.strip() else ("", None)
     analysis_mode = "stock"
+    analysis_product = "a_share_stock"
     instrument_profile: dict[str, Any] | None = None
     instrument_error: str | None = None
     if resolved_code:
@@ -503,6 +530,11 @@ def render_sidebar() -> None:
             if cached[2] is None:
                 cache[cache_key] = cached
         analysis_mode, instrument_profile, instrument_error = cached
+        if instrument_profile:
+            analysis_product = instrument_profile.get(
+                "analysis_product",
+                "passive_equity_etf" if analysis_mode == "etf" else "a_share_stock",
+            )
 
     if input_error:
         st.caption(f"❌ {input_error}")
@@ -515,14 +547,27 @@ def render_sidebar() -> None:
         fund_name = instrument_profile.get("fund_name") or instrument_profile.get(
             "symbol", resolved_code
         )
-        st.success(f"识别为 ETF · {fund_name} · {exchange_cn}")
+        product_label = (
+            "主动股票 ETF"
+            if analysis_product == "active_equity_etf"
+            else "被动股票指数 ETF"
+        )
+        st.success(f"识别为 {product_label} · {fund_name} · {exchange_cn}")
         limit_caption = _format_price_limit_caption(instrument_profile)
-        index_name = instrument_profile.get("tracking_index_name") or "未提供"
-        st.caption(f"跟踪 {index_name} · T+1 · {limit_caption}")
+        reference_payload = instrument_profile.get("reference_instrument") or {}
+        index_name = (
+            reference_payload.get("name")
+            if isinstance(reference_payload, dict)
+            else None
+        ) or instrument_profile.get("tracking_index_name") or "未提供"
+        relation_label = "比较基准" if analysis_product == "active_equity_etf" else "跟踪指数"
+        st.caption(f"{relation_label} {index_name} · T+1 · {limit_caption}")
         index_code, index_provider, index_status = _tracking_index_display(
             instrument_profile
         )
-        if index_code is None:
+        if analysis_product == "active_equity_etf":
+            st.caption("主动管理产品：不使用机械跟踪一致性；比较基准仅作为相对强弱背景。")
+        elif index_code is None:
             st.caption("指数代码未提供（可选）；不填写也可分析 ETF 自身数据。")
             user_index_code = st.text_input(
                 "跟踪指数代码（可选）",
@@ -572,6 +617,7 @@ def render_sidebar() -> None:
             "ticker": resolved_code,
             "trade_date": trade_date.strftime("%Y-%m-%d"),
             "analysis_mode": analysis_mode,
+            "analysis_product": analysis_product,
             "instrument_profile": instrument_profile,
             "fresh": True,
             "clear_other_mode": True,
@@ -608,6 +654,7 @@ def render_sidebar() -> None:
                     "ticker": t,
                     "trade_date": d,
                     "analysis_mode": entry.get("analysis_mode", "stock"),
+                    "analysis_product": entry.get("analysis_product"),
                     "instrument_profile": entry.get("instrument_profile"),
                 }
                 st.session_state["viewing_history"] = None

@@ -22,11 +22,23 @@ def create_research_manager(llm):
             state["company_of_interest"], state.get("instrument_profile")
         )
         evidence_lexicon = build_evidence_lexicon(
-            state.get("analysis_mode", "stock"), state.get("analysis_capabilities")
+            state.get("analysis_mode", "stock"),
+            state.get("analysis_capabilities"),
+            state.get("analysis_product"),
         )
         mode_rules = (
-            "For an ETF, prioritize index trend, liquidity, fund structure, and policy; "
-            "do not use company-specific evidence."
+            (
+                "For a passive ETF, prioritize verified tracking-index context, ETF market "
+                "price, liquidity, fund structure, and policy; preserve conflicted or standalone "
+                "states and do not use company-specific evidence."
+                if state.get("analysis_product") == "passive_equity_etf"
+                else "For an active ETF, prioritize the ETF's own market-price trend, liquidity, "
+                "fund structure, and policy; an optional benchmark is context only and does not "
+                "create mechanical tracking evidence."
+                if state.get("analysis_product") == "active_equity_etf"
+                else "For an ETF, prioritize index trend, liquidity, fund structure, and policy; "
+                "do not use company-specific evidence."
+            )
             if state.get("analysis_mode") == "etf"
             else "Factor in regulatory policy impact, hot money / capital flow dynamics, "
             "and lockup expiry / insider reduction risks."

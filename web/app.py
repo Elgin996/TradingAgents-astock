@@ -223,12 +223,18 @@ if start_req:
             start_req["ticker"],
             start_req["trade_date"],
             start_req.get("analysis_mode", "stock"),
+            start_req.get("analysis_product"),
         )
         clear_checkpoint(
             DEFAULT_CONFIG["data_cache_dir"],
             start_req["ticker"],
             start_req["trade_date"],
             start_req.get("analysis_mode", "stock"),
+            (
+                f"{start_req['analysis_product']}-v2"
+                if start_req.get("analysis_product")
+                else None
+            ),
         )
         if start_req.get("clear_other_mode"):
             other_mode = (
@@ -252,6 +258,7 @@ if start_req:
         ticker=start_req["ticker"],
         trade_date=start_req["trade_date"],
         analysis_mode=start_req.get("analysis_mode", "stock"),
+        analysis_product=start_req.get("analysis_product"),
         instrument_profile=start_req.get("instrument_profile"),
     )
     st.session_state["tracker"] = tracker
@@ -262,6 +269,7 @@ if start_req:
         config=_build_config(),
         tracker=tracker,
         analysis_mode=start_req.get("analysis_mode", "stock"),
+        analysis_product=start_req.get("analysis_product"),
         instrument_profile=start_req.get("instrument_profile"),
     )
 
@@ -323,6 +331,7 @@ elif tracker and tracker.error:
             "ticker": tracker.ticker,
             "trade_date": tracker.trade_date,
             "analysis_mode": tracker.analysis_mode,
+            "analysis_product": tracker.analysis_product,
             "instrument_profile": tracker.instrument_profile,
         }
         st.session_state["viewing_history"] = None

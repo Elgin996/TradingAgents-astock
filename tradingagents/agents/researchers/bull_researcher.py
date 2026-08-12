@@ -19,10 +19,16 @@ def create_bull_researcher(llm):
             state["company_of_interest"], state.get("instrument_profile")
         )
         evidence_lexicon = build_evidence_lexicon(
-            analysis_mode, state.get("analysis_capabilities")
+            analysis_mode,
+            state.get("analysis_capabilities"),
+            state.get("analysis_product"),
         )
-        debate_framework = build_debate_framework(analysis_mode, "bull")
-        general_points = build_general_debate_points(analysis_mode, "bull")
+        debate_framework = build_debate_framework(
+            analysis_mode, "bull", state.get("analysis_product")
+        )
+        general_points = build_general_debate_points(
+            analysis_mode, "bull", state.get("analysis_product")
+        )
         report_context = build_analysis_report_context(state)
         closing = (
             "Deliver a compelling bull argument grounded in ETF/index evidence and "

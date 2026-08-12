@@ -37,11 +37,13 @@ def create_trader(llm):
             company_name, instrument_profile
         )
         evidence_lexicon = build_evidence_lexicon(
-            analysis_mode, state.get("analysis_capabilities")
+            analysis_mode,
+            state.get("analysis_capabilities"),
+            state.get("analysis_product"),
         )
         investment_plan = state["investment_plan"]
         trading_constraints = build_trading_constraints(
-            analysis_mode, instrument_profile
+            analysis_mode, instrument_profile, state.get("analysis_product")
         )
 
         # Collect A-stock specific analyst reports only in stock mode.
@@ -59,7 +61,11 @@ def create_trader(llm):
             astock_context = "\n\n".join(astock_context_parts)
 
         analyst_description = (
-            "ETF technical, liquidity, structure, and index-news specialists"
+            "passive ETF technical, verified-index, liquidity, structure, and policy specialists"
+            if state.get("analysis_product") == "passive_equity_etf"
+            else "active ETF technical, liquidity, structure, and benchmark-context specialists"
+            if state.get("analysis_product") == "active_equity_etf"
+            else "ETF technical, liquidity, structure, and index-news specialists"
             if analysis_mode == "etf"
             else "market, sentiment, news, fundamentals, policy, capital flow, and lockup/reduction specialists"
         )

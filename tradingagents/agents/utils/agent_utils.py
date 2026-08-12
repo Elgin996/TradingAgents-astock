@@ -66,12 +66,38 @@ def build_instrument_context(
         tracking_code = instrument_profile.get("tracking_index_code")
         if isinstance(tracking_code, dict):
             tracking_code = tracking_code.get("value", {}).get("code")
+        reference = instrument_profile.get("reference_instrument")
+        if isinstance(reference, dict):
+            reference_name = reference.get("name") or "unavailable"
+            reference_code = reference.get("code") or tracking_code
+            reference_provider = reference.get("provider") or "unavailable"
+            reference_variant = reference.get("series_variant") or "unknown"
+        else:
+            reference_name = instrument_profile.get("tracking_index_name") or "unavailable"
+            reference_code = tracking_code
+            reference_provider = "unavailable"
+            reference_variant = "unknown"
+        product = instrument_profile.get("analysis_product")
+        if product == "active_equity_etf" or instrument_profile.get("etf_management_style") == "active":
+            return (
+                f"The instrument is the domestic active equity ETF `{ticker}` "
+                f"({instrument_profile.get('fund_name', ticker)}) on "
+                f"{instrument_profile.get('exchange')}. It is analyzed as a standalone "
+                "vehicle; it has no mechanical tracking relationship. "
+                f"Optional benchmark: {reference_name}; code/provider/variant: "
+                f"{reference_code or 'unavailable'} / {reference_provider} / {reference_variant}. "
+                f"Trading rules: T+1, minimum lot 100 shares, price limit "
+                f"{limit_value or '10'}% ({limit_status}). Use ETF market-price, "
+                "liquidity, and disclosed-fund evidence only; benchmark data is context, "
+                "not tracking-quality evidence. Use the exact ETF code in every tool call."
+            )
         return (
             f"The instrument is the domestic equity ETF `{ticker}` "
             f"({instrument_profile.get('fund_name', ticker)}) on "
             f"{instrument_profile.get('exchange')}. It tracks "
-            f"{instrument_profile.get('tracking_index_name')}. "
-            f"Tracking index code: {tracking_code or 'unavailable'}. "
+            f"{reference_name}. "
+            f"Tracking index code/provider/variant: {reference_code or 'unavailable'} / "
+            f"{reference_provider} / {reference_variant}. "
             f"Trading rules: T+1, minimum lot 100 shares, price limit "
             f"{limit_value or '10'}% ({limit_status}). Use ETF/index evidence "
             "only; never use company revenue, management, lockups, or insider "
@@ -86,10 +112,29 @@ def build_instrument_context(
     )
 
 
-def build_evidence_lexicon(analysis_mode: str, capabilities: list[str] | None) -> str:
+def build_evidence_lexicon(
+    analysis_mode: str,
+    capabilities: list[str] | None,
+    analysis_product: str | None = None,
+) -> str:
     """Supply mode-specific allowed and prohibited evidence without duplicating prompts."""
     if analysis_mode != "etf":
         return ""
+    active = analysis_product == "active_equity_etf" or (
+        analysis_product is None
+        and "benchmark_price_history" in (capabilities or [])
+        and "tracking_index_identity" not in (capabilities or [])
+    )
+    if active:
+        return (
+            "Allowed evidence: the ETF's own market price and technical data, liquidity, "
+            "disclosed shares/AUM, fund profile and announcements, and optional benchmark "
+            "context. Prohibited evidence: company financials, management, insider "
+            "transactions, lockups, mechanical tracking-consistency claims, formal "
+            "tracking-quality claims, NAV/IOPV-based premium/discount, PCF, or claims "
+            "about real-time holdings. Benchmark evidence cannot override the ETF's own "
+            f"stance. Active capabilities: {', '.join(capabilities or [])}."
+        )
     return (
         "Allowed evidence: ETF price/technical data, liquidity, disclosed shares/AUM, "
         "fund profile and announcements, tracking-index news and policy, "
@@ -102,9 +147,29 @@ def build_evidence_lexicon(analysis_mode: str, capabilities: list[str] | None) -
     )
 
 
-def build_general_debate_points(analysis_mode: str, side: str) -> str:
+def build_general_debate_points(
+    analysis_mode: str, side: str, analysis_product: str | None = None
+) -> str:
     """Mode-specific thesis bullets injected into the shared bull/bear prompt body."""
     if analysis_mode == "etf":
+        if analysis_product == "active_equity_etf":
+            if side == "bull":
+                return (
+                    "General bull points:\n"
+                    "- ETF Momentum: Strength and persistence in the vehicle's own price trend\n"
+                    "- Tradability: Adequate liquidity and reliable market-data quality\n"
+                    "- Fund Context: Disclosed structure and optional benchmark background\n"
+                    "- Bear Counterpoints: Refute bear claims with dated ETF evidence\n"
+                    "- Engagement: Argue conversationally against the bear analyst"
+                )
+            return (
+                "General bear points:\n"
+                "- Vehicle Deterioration: Weakening own-price trend or momentum\n"
+                "- Tradability Risk: Thin liquidity or stale disclosures\n"
+                "- Benchmark Limits: Do not treat optional benchmark context as mechanical tracking\n"
+                "- Bull Counterpoints: Expose optimistic assumptions with dated ETF evidence\n"
+                "- Engagement: Argue conversationally against the bull analyst"
+            )
         if side == "bull":
             return (
                 "General bull points:\n"
@@ -141,7 +206,11 @@ def build_general_debate_points(analysis_mode: str, side: str) -> str:
     )
 
 
-def build_trading_constraints(analysis_mode: str, instrument_profile: dict | None = None) -> str:
+def build_trading_constraints(
+    analysis_mode: str,
+    instrument_profile: dict | None = None,
+    analysis_product: str | None = None,
+) -> str:
     """Return the trading-rule block for trader/PM without duplicating prompt files."""
     if analysis_mode == "etf":
         limit = 10
@@ -153,12 +222,18 @@ def build_trading_constraints(analysis_mode: str, instrument_profile: dict | Non
                 limit_status = raw.get("status") or "assumed"
             elif raw is not None:
                 limit = raw
+        benchmark_line = (
+            "- Any disclosed benchmark is contextual only; do not treat it as a tracking signal"
+            if analysis_product == "active_equity_etf"
+            else "- Use the verified tracking-index context only for the product relationship section"
+        )
         return (
             "ETF trading constraints (must factor into the decision):\n"
             "- T+1 settlement for secondary-market ETF shares\n"
             f"- Daily price limit: ±{limit}% ({limit_status}); do not invent board-specific stock rules\n"
             "- Minimum lot: 100 shares\n"
-            "- Use only ETF technical, liquidity, structure, and index-news evidence\n"
+            "- Use only ETF technical, liquidity, structure, and appropriate reference-news evidence\n"
+            f"{benchmark_line}\n"
             "- Do not cite company financials, management, lockups, or insider activity\n"
             "- Trading hours follow the A-share session calendar"
         )
@@ -179,7 +254,9 @@ def build_trading_constraints(analysis_mode: str, instrument_profile: dict | Non
     )
 
 
-def build_risk_framework(analysis_mode: str, posture: str) -> str:
+def build_risk_framework(
+    analysis_mode: str, posture: str, analysis_product: str | None = None
+) -> str:
     """Return the mode-dependent risk framework injected into one shared prompt."""
     if analysis_mode != "etf":
         return {
@@ -255,6 +332,21 @@ def build_risk_framework(analysis_mode: str, posture: str) -> str:
                 "position captures upside while limiting locked-in loss scenarios."
             ),
         }[posture]
+    if analysis_product == "active_equity_etf":
+        return {
+            "aggressive": (
+                "Focus on the active ETF's own price momentum, liquidity, disclosed fund context, "
+                "and any benchmark only as non-mechanical background."
+            ),
+            "conservative": (
+                "Focus on weak own-price trend, thin liquidity, stale disclosures, T+1 and price "
+                "limits. Do not turn an optional benchmark into a tracking conclusion."
+            ),
+            "neutral": (
+                "Balance the active ETF's own trend, liquidity, disclosure freshness, T+1 limits, "
+                "and optional benchmark context without mechanical tracking language."
+            ),
+        }[posture]
     return {
         "aggressive": (
             "Consider tracking-index momentum, policy support for the index theme, "
@@ -279,8 +371,14 @@ def build_analysis_report_context(state: dict) -> str:
         from tradingagents.dataflows.analysis_capabilities import report_field_is_active
 
         capabilities = state.get("analysis_capabilities")
+        product = state.get("analysis_product")
+        technical_label = (
+            "Active ETF technical report"
+            if product == "active_equity_etf"
+            else "ETF technical report"
+        )
         sections = [
-            ("market_report", "ETF technical report"),
+            ("market_report", technical_label),
             ("etf_liquidity_report", "ETF liquidity report"),
             ("etf_profile_report", "ETF structure report"),
             ("etf_index_news_report", "Index news and policy report"),
@@ -308,9 +406,22 @@ def build_analysis_report_context(state: dict) -> str:
     )
 
 
-def build_debate_framework(analysis_mode: str, side: str) -> str:
+def build_debate_framework(
+    analysis_mode: str, side: str, analysis_product: str | None = None
+) -> str:
     """Provide a compact, mode-correct thesis framework for bull/bear debate."""
     if analysis_mode == "etf":
+        if analysis_product == "active_equity_etf":
+            return {
+                "bull": (
+                    "Bull thesis: the active ETF's own technical trend, liquidity, disclosed "
+                    "fund context, and any benchmark background that does not replace its own signal."
+                ),
+                "bear": (
+                    "Bear thesis: weakening own-price trend, liquidity or disclosure quality, "
+                    "T+1 constraints, and the limits of optional benchmark context."
+                ),
+            }[side]
         return {
             "bull": (
                 "Bull thesis: tracking-index trend, supportive policy, adequate ETF "

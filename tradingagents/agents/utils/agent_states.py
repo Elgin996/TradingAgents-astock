@@ -53,6 +53,7 @@ class AgentState(MessagesState):
         dict[str, str], "Unavailable capabilities and auditable reasons"
     ]
     report_schema_version: Annotated[str, "Report schema version"]
+    analysis_product: NotRequired[str]
 
     sender: Annotated[str, "Agent that sent this message"]
 
@@ -85,6 +86,9 @@ class AgentState(MessagesState):
     technical_assessment: NotRequired[dict[str, Any]]
     technical_evidence_bundle: NotRequired[dict[str, Any]]
     technical_report_validation: NotRequired[dict[str, Any]]
+    analysis_market_data_bundle: NotRequired[dict[str, Any]]
+    product_technical_evidence_bundle: NotRequired[dict[str, Any]]
+    technical_shadow_comparison: NotRequired[dict[str, Any] | None]
 
     # researcher team discussion step
     investment_debate_state: Annotated[

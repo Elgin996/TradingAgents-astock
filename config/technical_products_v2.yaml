@@ -1,0 +1,39 @@
+version: technical-products-v2
+rule_version: product-technical-rules-v2
+products:
+  a_share_stock:
+    security_type: stock
+    indicator_config: indicator-config-v1
+    enabled_categories: [trend, momentum, volatility, volume, level]
+    volume_enabled: true
+    amount_enabled: true
+    min_warmup: 220
+    relation_enabled: true
+    reference_role: benchmark
+  passive_equity_etf:
+    security_type: etf
+    indicator_config: indicator-config-v1
+    enabled_categories: [trend, momentum, volatility, volume, level]
+    volume_enabled: true
+    amount_enabled: true
+    min_warmup: 220
+    relation_enabled: true
+    reference_role: tracking_index
+  active_equity_etf:
+    security_type: etf
+    indicator_config: indicator-config-v1
+    enabled_categories: [trend, momentum, volatility, volume, level]
+    volume_enabled: true
+    amount_enabled: true
+    min_warmup: 220
+    relation_enabled: true
+    reference_role: benchmark
+  index:
+    security_type: index
+    indicator_config: indicator-config-v1
+    enabled_categories: [trend, momentum, volatility, level]
+    volume_enabled: false
+    amount_enabled: false
+    min_warmup: 220
+    relation_enabled: false
+    reference_role: null

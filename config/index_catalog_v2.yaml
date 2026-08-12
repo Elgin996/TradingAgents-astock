@@ -1,0 +1,180 @@
+version: index-catalog-v2
+source: curated
+source_as_of: 2026-08-12
+records:
+  - instrument_id: CSI:000300:price
+    code: "000300"
+    name: 沪深300指数
+    aliases: [沪深300, 沪深300价格指数]
+    provider: CSI
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: CSI:000905:price
+    code: "000905"
+    name: 中证500指数
+    aliases: [中证500, 中证500价格指数]
+    provider: CSI
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: CSI:000852:price
+    code: "000852"
+    name: 中证1000指数
+    aliases: [中证1000, 中证1000价格指数]
+    provider: CSI
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: CSI:000906:price
+    code: "000906"
+    name: 中证800指数
+    aliases: [中证800, 中证800价格指数]
+    provider: CSI
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: CSI:000510:price
+    code: "000510"
+    name: 中证A500指数
+    aliases: [中证A500, 中证A500价格指数]
+    provider: CSI
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: SSE:000016:price
+    code: "000016"
+    name: 上证50指数
+    aliases: [上证50, 上证50价格指数]
+    provider: SSE
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: SSE:000010:price
+    code: "000010"
+    name: 上证180指数
+    aliases: [上证180, 上证180价格指数]
+    provider: SSE
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: SSE:000688:price
+    code: "000688"
+    name: 上证科创板50成份指数
+    aliases: [科创50, 科创板50, 上证科创板50成份]
+    provider: SSE
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: SZSE:399006:price
+    code: "399006"
+    name: 创业板指
+    aliases: [创业板, 创业板指数, 创业板价格指数]
+    provider: SZSE
+    exchange_route: sz
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: SZSE:399001:price
+    code: "399001"
+    name: 深证成指
+    aliases: [深证成份, 深证成份指数, 深证成指价格指数]
+    provider: SZSE
+    exchange_route: sz
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: SZSE:399005:price
+    code: "399005"
+    name: 中小板指
+    aliases: [中小板, 中小板指数]
+    provider: SZSE
+    exchange_route: sz
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: CSI:399986:price
+    code: "399986"
+    name: 中证银行指数
+    aliases: [中证银行, 银行指数]
+    provider: CSI
+    exchange_route: sz
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: CSI:399997:price
+    code: "399997"
+    name: 中证白酒指数
+    aliases: [中证白酒, 白酒指数]
+    provider: CSI
+    exchange_route: sz
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: CSI:399989:price
+    code: "399989"
+    name: 中证医药指数
+    aliases: [中证医药, 医药指数]
+    provider: CSI
+    exchange_route: sz
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: CSI:000922:price
+    code: "000922"
+    name: 中证红利指数
+    aliases: [中证红利, 中证红利价格指数]
+    provider: CSI
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12
+  - instrument_id: SSE:000015:price
+    code: "000015"
+    name: 上证红利指数
+    aliases: [上证红利, 上证红利价格指数]
+    provider: SSE
+    exchange_route: sh
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: curated
+    source_as_of: 2026-08-12

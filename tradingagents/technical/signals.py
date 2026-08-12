@@ -57,6 +57,7 @@ def generate_signals(
     *,
     quality_grade: str = "A",
     rule_version: str = SIGNAL_RULE_VERSION,
+    enabled_categories: Iterable[str] | None = None,
 ) -> list[TechnicalSignal]:
     """Generate the same signal list for the same indicator frame."""
     if frame is None or frame.empty:
@@ -65,59 +66,68 @@ def generate_signals(
     observed_at = pd.Timestamp(row["trade_date"]).date()
     quality_confidence = _QUALITY_CONFIDENCE.get(quality_grade, 0.0)
     signals: list[TechnicalSignal] = []
+    categories = set(
+        enabled_categories
+        or ("trend", "momentum", "volatility", "volume", "level")
+    )
 
     close = _number(row, "close")
-    for period in (20, 50, 200):
-        sma = _number(row, f"close_sma_{period}")
-        direction = "unavailable" if close is None or sma is None else ("bullish" if close > sma else "bearish" if close < sma else "neutral")
-        signals.append(_signal(f"trend.close_vs_sma{period}", "trend", direction, _relative_strength(close, sma) if close is not None and sma is not None else 0, quality_confidence if sma is not None else 0, observed_at, {"close": close, "sma": sma}, "close_vs_sma", rule_version))
+    if "trend" in categories:
+        for period in (20, 50, 200):
+            sma = _number(row, f"close_sma_{period}")
+            direction = "unavailable" if close is None or sma is None else ("bullish" if close > sma else "bearish" if close < sma else "neutral")
+            signals.append(_signal(f"trend.close_vs_sma{period}", "trend", direction, _relative_strength(close, sma) if close is not None and sma is not None else 0, quality_confidence if sma is not None else 0, observed_at, {"close": close, "sma": sma}, "close_vs_sma", rule_version))
 
-    sma20, sma50 = _number(row, "close_sma_20"), _number(row, "close_sma_50")
-    alignment = "unavailable" if sma20 is None or sma50 is None else ("bullish" if sma20 > sma50 else "bearish" if sma20 < sma50 else "neutral")
-    signals.append(_signal("trend.sma20_sma50_alignment", "trend", alignment, _relative_strength(sma20, sma50) if sma20 is not None and sma50 is not None else 0, quality_confidence if alignment != "unavailable" else 0, observed_at, {"sma20": sma20, "sma50": sma50}, "sma_alignment", rule_version))
+        sma20, sma50 = _number(row, "close_sma_20"), _number(row, "close_sma_50")
+        alignment = "unavailable" if sma20 is None or sma50 is None else ("bullish" if sma20 > sma50 else "bearish" if sma20 < sma50 else "neutral")
+        signals.append(_signal("trend.sma20_sma50_alignment", "trend", alignment, _relative_strength(sma20, sma50) if sma20 is not None and sma50 is not None else 0, quality_confidence if alignment != "unavailable" else 0, observed_at, {"sma20": sma20, "sma50": sma50}, "sma_alignment", rule_version))
 
-    ema = _number(row, "close_10_ema")
-    previous_ema = _number(frame.iloc[-2], "close_10_ema") if len(frame) > 1 else None
-    ema_direction = "unavailable" if close is None or ema is None or previous_ema is None else ("bullish" if close > ema and ema >= previous_ema else "bearish" if close < ema and ema <= previous_ema else "neutral")
-    signals.append(_signal("trend.ema10_slope_position", "trend", ema_direction, _relative_strength(close, ema) if close is not None and ema is not None else 0, quality_confidence if ema_direction != "unavailable" else 0, observed_at, {"close": close, "ema10": ema, "previous_ema10": previous_ema}, "ema_slope_position", rule_version))
+        ema = _number(row, "close_10_ema")
+        previous_ema = _number(frame.iloc[-2], "close_10_ema") if len(frame) > 1 else None
+        ema_direction = "unavailable" if close is None or ema is None or previous_ema is None else ("bullish" if close > ema and ema >= previous_ema else "bearish" if close < ema and ema <= previous_ema else "neutral")
+        signals.append(_signal("trend.ema10_slope_position", "trend", ema_direction, _relative_strength(close, ema) if close is not None and ema is not None else 0, quality_confidence if ema_direction != "unavailable" else 0, observed_at, {"close": close, "ema10": ema, "previous_ema10": previous_ema}, "ema_slope_position", rule_version))
 
-    macd, macds, macdh = _number(row, "macd"), _number(row, "macds"), _number(row, "macdh")
-    macd_direction = "unavailable" if macd is None or macds is None else ("bullish" if macd > macds and macd > 0 else "bearish" if macd < macds and macd < 0 else "neutral")
-    signals.append(_signal("momentum.macd_state", "momentum", macd_direction, min(1.0, abs(macdh or 0) / max(abs(macd or 0), 1e-9)), quality_confidence if macd_direction != "unavailable" else 0, observed_at, {"macd": macd, "signal": macds, "histogram": macdh}, "macd_state", rule_version))
+    if "momentum" in categories:
+        macd, macds, macdh = _number(row, "macd"), _number(row, "macds"), _number(row, "macdh")
+        macd_direction = "unavailable" if macd is None or macds is None else ("bullish" if macd > macds and macd > 0 else "bearish" if macd < macds and macd < 0 else "neutral")
+        signals.append(_signal("momentum.macd_state", "momentum", macd_direction, min(1.0, abs(macdh or 0) / max(abs(macd or 0), 1e-9)), quality_confidence if macd_direction != "unavailable" else 0, observed_at, {"macd": macd, "signal": macds, "histogram": macdh}, "macd_state", rule_version))
 
-    rsi = _number(row, "rsi")
-    rsi_direction = "unavailable" if rsi is None else ("bullish" if 50 <= rsi < 70 else "bearish" if 30 < rsi < 50 else "neutral")
-    rsi_strength = abs(rsi - 50) / 50 if rsi is not None else 0
-    signals.append(_signal("momentum.rsi_regime", "momentum", rsi_direction, rsi_strength, quality_confidence if rsi is not None else 0, observed_at, {"rsi": rsi}, "rsi_regime", rule_version))
+        rsi = _number(row, "rsi")
+        rsi_direction = "unavailable" if rsi is None else ("bullish" if 50 <= rsi < 70 else "bearish" if 30 < rsi < 50 else "neutral")
+        rsi_strength = abs(rsi - 50) / 50 if rsi is not None else 0
+        signals.append(_signal("momentum.rsi_regime", "momentum", rsi_direction, rsi_strength, quality_confidence if rsi is not None else 0, observed_at, {"rsi": rsi}, "rsi_regime", rule_version))
 
-    boll, upper, lower = _number(row, "boll"), _number(row, "boll_ub"), _number(row, "boll_lb")
-    if close is None or upper is None or lower is None or upper == lower:
-        boll_direction, boll_position, boll_strength = "unavailable", None, 0.0
-    else:
-        boll_position = (close - lower) / (upper - lower)
-        boll_direction = "bullish" if boll_position > 0.8 else "bearish" if boll_position < 0.2 else "neutral"
-        boll_strength = min(1.0, abs(boll_position - 0.5) * 2)
-    signals.append(_signal("volatility.bollinger_position", "volatility", boll_direction, boll_strength, quality_confidence if boll_direction != "unavailable" else 0, observed_at, {"close": close, "middle": boll, "upper": upper, "lower": lower, "position": boll_position}, "bollinger_position", rule_version))
+    if "volatility" in categories:
+        boll, upper, lower = _number(row, "boll"), _number(row, "boll_ub"), _number(row, "boll_lb")
+        if close is None or upper is None or lower is None or upper == lower:
+            boll_direction, boll_position, boll_strength = "unavailable", None, 0.0
+        else:
+            boll_position = (close - lower) / (upper - lower)
+            boll_direction = "bullish" if boll_position > 0.8 else "bearish" if boll_position < 0.2 else "neutral"
+            boll_strength = min(1.0, abs(boll_position - 0.5) * 2)
+        signals.append(_signal("volatility.bollinger_position", "volatility", boll_direction, boll_strength, quality_confidence if boll_direction != "unavailable" else 0, observed_at, {"close": close, "middle": boll, "upper": upper, "lower": lower, "position": boll_position}, "bollinger_position", rule_version))
 
-    atr = _number(row, "atr")
-    atr_ratio = atr / close if atr is not None and close else None
-    signals.append(_signal("volatility.atr_regime", "volatility", "neutral" if atr_ratio is not None else "unavailable", min(1.0, (atr_ratio or 0) * 10), quality_confidence if atr_ratio is not None else 0, observed_at, {"atr": atr, "atr_ratio": atr_ratio}, "atr_regime", rule_version))
+        atr = _number(row, "atr")
+        atr_ratio = atr / close if atr is not None and close else None
+        signals.append(_signal("volatility.atr_regime", "volatility", "neutral" if atr_ratio is not None else "unavailable", min(1.0, (atr_ratio or 0) * 10), quality_confidence if atr_ratio is not None else 0, observed_at, {"atr": atr, "atr_ratio": atr_ratio}, "atr_regime", rule_version))
 
-    vol5, vol20 = _number(row, "volume_5_sma"), _number(row, "volume_20_sma")
-    volume_ratio = vol5 / vol20 if vol5 is not None and vol20 not in (None, 0) else None
-    volume_direction = "unavailable" if volume_ratio is None else ("bullish" if volume_ratio > 1.2 and close is not None and len(frame) > 1 and close >= float(frame.iloc[-2]["close"]) else "bearish" if volume_ratio > 1.2 else "neutral")
-    signals.append(_signal("volume.short_long_ratio", "volume", volume_direction, min(1.0, abs((volume_ratio or 1) - 1) * 2), quality_confidence if volume_ratio is not None else 0, observed_at, {"volume5": vol5, "volume20": vol20, "ratio": volume_ratio}, "volume_confirmation", rule_version))
+    if "volume" in categories:
+        vol5, vol20 = _number(row, "volume_5_sma"), _number(row, "volume_20_sma")
+        volume_ratio = vol5 / vol20 if vol5 is not None and vol20 not in (None, 0) else None
+        volume_direction = "unavailable" if volume_ratio is None else ("bullish" if volume_ratio > 1.2 and close is not None and len(frame) > 1 and close >= float(frame.iloc[-2]["close"]) else "bearish" if volume_ratio > 1.2 else "neutral")
+        signals.append(_signal("volume.short_long_ratio", "volume", volume_direction, min(1.0, abs((volume_ratio or 1) - 1) * 2), quality_confidence if volume_ratio is not None else 0, observed_at, {"volume5": vol5, "volume20": vol20, "ratio": volume_ratio}, "volume_confirmation", rule_version))
 
-    high20, low20, high60, low60 = (_number(row, key) for key in ("rolling_high_20", "rolling_low_20", "rolling_high_60", "rolling_low_60"))
-    if close is None or high20 is None or low20 is None:
-        level_direction, level_strength = "unavailable", 0.0
-    elif close > high20:
-        level_direction, level_strength = "bullish", 1.0
-    elif close < low20:
-        level_direction, level_strength = "bearish", 1.0
-    else:
-        level_direction, level_strength = "neutral", 0.0
-    signals.append(_signal("level.rolling_breakout20", "level", level_direction, level_strength, quality_confidence if level_direction != "unavailable" else 0, observed_at, {"close": close, "high20": high20, "low20": low20, "high60": high60, "low60": low60}, "rolling_breakout", rule_version))
+    if "level" in categories:
+        high20, low20, high60, low60 = (_number(row, key) for key in ("rolling_high_20", "rolling_low_20", "rolling_high_60", "rolling_low_60"))
+        if close is None or high20 is None or low20 is None:
+            level_direction, level_strength = "unavailable", 0.0
+        elif close > high20:
+            level_direction, level_strength = "bullish", 1.0
+        elif close < low20:
+            level_direction, level_strength = "bearish", 1.0
+        else:
+            level_direction, level_strength = "neutral", 0.0
+        signals.append(_signal("level.rolling_breakout20", "level", level_direction, level_strength, quality_confidence if level_direction != "unavailable" else 0, observed_at, {"close": close, "high20": high20, "low20": low20, "high60": high60, "low60": low60}, "rolling_breakout", rule_version))
     return signals
 
 
@@ -184,14 +194,20 @@ def assess_signals(
 
 
 class SignalEngine:
-    def __init__(self, indicator_config: IndicatorConfig | None = None, rules: Mapping | None = None):
+    def __init__(self, indicator_config: IndicatorConfig | None = None, rules: Mapping | None = None, enabled_categories: Iterable[str] | None = None):
         self.indicator_engine = IndicatorEngine(indicator_config)
         self.rules = dict(rules or load_project_versioned_config("signal_rules_v1.yaml"))
         self.rule_version = str(self.rules["version"])
+        self.enabled_categories = tuple(enabled_categories) if enabled_categories is not None else None
 
-    def run(self, bars_or_frame, *, quality_grade: str = "A", snapshot_id: str = "") -> SignalEvaluation:
+    def run(self, bars_or_frame, *, quality_grade: str = "A", snapshot_id: str = "", enabled_categories: Iterable[str] | None = None) -> SignalEvaluation:
         frame = bars_or_frame if isinstance(bars_or_frame, pd.DataFrame) else self.indicator_engine.calculate_frame(bars_or_frame)
-        signals = generate_signals(frame, quality_grade=quality_grade, rule_version=self.rule_version)
+        signals = generate_signals(
+            frame,
+            quality_grade=quality_grade,
+            rule_version=self.rule_version,
+            enabled_categories=enabled_categories if enabled_categories is not None else self.enabled_categories,
+        )
         assessment = assess_signals(
             signals,
             quality_grade=quality_grade,

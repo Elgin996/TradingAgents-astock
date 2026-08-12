@@ -628,6 +628,10 @@ def get_user_selections():
         "openai_reasoning_effort": reasoning_effort,
         "anthropic_effort": anthropic_effort,
         "output_language": output_language,
+        # The interactive CLI has enough context to run the same identity
+        # resolver as the Web UI.  Keeping this explicit lets legacy callers
+        # that inject a minimal selections dict retain their offline tests.
+        "auto_product_resolution": True,
     }
 
 
@@ -1029,9 +1033,42 @@ def ensure_final_state(trace):
     return final_state
 
 
+def _resolve_cli_product(ticker: str):
+    """Resolve domestic six-digit identity before CLI graph creation.
+
+    Non-A-share symbols retain the historical generic route.  Six-digit
+    domestic symbols use the same securities master as the Web UI; a source
+    failure is surfaced instead of guessing ETF-vs-stock from a prefix.
+    """
+
+    import re
+
+    if not re.fullmatch(r"\d{6}", str(ticker).strip()):
+        return "stock", None, None
+    from tradingagents.dataflows.instrument import profile_for_stock, profile_from_fund_master
+    from tradingagents.dataflows.a_stock import resolve_a_share_exchange
+    from tradingagents.dataflows.security_master import resolve_fund_master
+
+    record = resolve_fund_master(ticker)
+    if record.classification in {"domestic_equity_etf", "active_equity_etf"}:
+        profile = profile_from_fund_master(record).to_dict()
+        return "etf", profile, profile.get("analysis_product")
+    if record.classification == "unsupported_fund":
+        raise ValueError(f"当前版本不支持该产品：{record.classification_reason}")
+    exchange = resolve_a_share_exchange(ticker)
+    profile = profile_for_stock(ticker, exchange=exchange).to_dict()
+    return "stock", profile, "a_share_stock"
+
+
 def run_analysis(checkpoint: bool = False):
     # First get all user selections
     selections = get_user_selections()
+    if selections.get("auto_product_resolution", False):
+        analysis_mode, instrument_profile, analysis_product = _resolve_cli_product(
+            selections["ticker"]
+        )
+    else:
+        analysis_mode, instrument_profile, analysis_product = "stock", None, None
 
     # Create config with selected research depth
     config = DEFAULT_CONFIG.copy()
@@ -1168,6 +1205,9 @@ def run_analysis(checkpoint: bool = False):
             selections["ticker"],
             selections["analysis_date"],
             callbacks=[stats_handler],
+            analysis_mode=analysis_mode,
+            analysis_product=analysis_product,
+            instrument_profile=instrument_profile,
         )
         if resume_step is not None:
             console.print(f"[yellow]从断点续跑：已完成 {resume_step} 步[/yellow]")

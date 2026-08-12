@@ -29,6 +29,11 @@ class TechnicalSignalSample(BaseModel):
     technical_score: float
     confidence: float
     rule_version: str
+    analysis_product: str = "a_share_stock"
+    product_state: str | None = None
+    subject_stance: str | None = None
+    reference_stance: str | None = None
+    alignment_state: str | None = None
     forward_return_5d: float | None = None
     forward_return_20d: float | None = None
     forward_return_60d: float | None = None
@@ -38,6 +43,9 @@ class TechnicalSignalSample(BaseModel):
     forward_alpha_5d: float | None = None
     forward_alpha_20d: float | None = None
     forward_alpha_60d: float | None = None
+    reference_forward_return_5d: float | None = None
+    reference_forward_return_20d: float | None = None
+    reference_forward_return_60d: float | None = None
 
 
 def _future_return(prices: pd.Series, signal_date: date, horizon: int) -> float | None:
@@ -70,6 +78,11 @@ def label_signal(
     prices: Mapping,
     benchmark_prices: Mapping | None = None,
     source_status: str = "",
+    analysis_product: str = "a_share_stock",
+    product_state: str | None = None,
+    subject_stance: str | None = None,
+    reference_stance: str | None = None,
+    alignment_state: str | None = None,
 ) -> TechnicalSignalSample:
     signal_date = date.fromisoformat(signal_date) if isinstance(signal_date, str) else signal_date
     prices = pd.Series(prices)
@@ -81,6 +94,7 @@ def label_signal(
         forward = values[f"forward_return_{horizon}d"]
         benchmark_value = values[f"benchmark_return_{horizon}d"]
         values[f"forward_alpha_{horizon}d"] = forward - benchmark_value if forward is not None and benchmark_value is not None else None
+        values[f"reference_forward_return_{horizon}d"] = values[f"benchmark_return_{horizon}d"]
     return TechnicalSignalSample(
         symbol=symbol,
         signal_date=signal_date,
@@ -91,6 +105,11 @@ def label_signal(
         technical_score=technical_score,
         confidence=confidence,
         rule_version=rule_version,
+        analysis_product=analysis_product,
+        product_state=product_state,
+        subject_stance=subject_stance,
+        reference_stance=reference_stance,
+        alignment_state=alignment_state,
         **values,
     )
 
@@ -146,6 +165,9 @@ def evaluate_samples(samples: Iterable[TechnicalSignalSample | Mapping]) -> dict
         "by_quality": {},
         "by_source": {},
         "by_confidence": {},
+        "by_analysis_product": {},
+        "by_product_state": {},
+        "by_alignment_state": {},
         "by_horizon": {str(horizon): _summary(rows, horizon) for horizon in (5, 20, 60)},
         "rule_versions": sorted({sample.rule_version for sample in rows}),
         "non_trading_evaluation": True,
@@ -156,7 +178,19 @@ def evaluate_samples(samples: Iterable[TechnicalSignalSample | Mapping]) -> dict
         result["by_source"].setdefault(sample.source_status or "unknown", []).append(sample)
         bucket = "high" if sample.confidence >= 0.75 else "medium" if sample.confidence >= 0.4 else "low"
         result["by_confidence"].setdefault(bucket, []).append(sample)
-    for key in ("by_quality", "by_source", "by_confidence"):
+        result["by_analysis_product"].setdefault(sample.analysis_product, []).append(sample)
+        if sample.product_state:
+            result["by_product_state"].setdefault(sample.product_state, []).append(sample)
+        if sample.alignment_state:
+            result["by_alignment_state"].setdefault(sample.alignment_state, []).append(sample)
+    for key in (
+        "by_quality",
+        "by_source",
+        "by_confidence",
+        "by_analysis_product",
+        "by_product_state",
+        "by_alignment_state",
+    ):
         result[key] = {
             group: {str(horizon): _summary(group_rows, horizon) for horizon in (5, 20, 60)}
             for group, group_rows in result[key].items()
@@ -173,3 +207,34 @@ class TechnicalSignalEvaluator:
     def evaluate(self, samples: Iterable[TechnicalSignalSample | Mapping]) -> dict:
         return evaluate_samples(samples)
 
+
+def label_product_signal(**kwargs) -> TechnicalSignalSample:
+    """Explicit alias used by the product-aware evaluation pipeline."""
+
+    if "analysis_product" not in kwargs:
+        raise ValueError("label_product_signal requires analysis_product")
+    return label_signal(**kwargs)
+
+
+def evaluate_product_samples(
+    samples: Iterable[TechnicalSignalSample | Mapping],
+    *,
+    analysis_product: str | None = None,
+) -> dict:
+    rows = [
+        sample if isinstance(sample, TechnicalSignalSample) else TechnicalSignalSample.model_validate(sample)
+        for sample in samples
+    ]
+    if analysis_product is not None:
+        rows = [sample for sample in rows if sample.analysis_product == analysis_product]
+    result = evaluate_samples(rows)
+    result["evaluation_scope"] = "product_signal_statistics"
+    result["non_trading_evaluation"] = True
+    result["excluded_metrics"] = [
+        "portfolio_return",
+        "annualized_return",
+        "sharpe",
+        "max_drawdown",
+        "execution_simulation",
+    ]
+    return result
