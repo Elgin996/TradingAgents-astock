@@ -80,9 +80,39 @@ def evaluate_market_data_quality(quality) -> dict[str, object]:
     return {"decision": decision, "failed": decision == "block", "summary": summary}
 
 
+def _preserve_stricter_market_decision(
+    result: dict[str, object], bundle_decision: object
+) -> dict[str, object]:
+    """Prevent a reference/alignment downgrade from being promoted by subject quality."""
+    decisions = {"allow", "observe_only", "block"}
+    if bundle_decision not in decisions:
+        return result
+    rank = {"allow": 0, "observe_only": 1, "block": 2}
+    subject_decision = result.get("decision")
+    if subject_decision in decisions:
+        decision = max(
+            (str(subject_decision), str(bundle_decision)),
+            key=rank.__getitem__,
+        )
+    else:
+        decision = str(bundle_decision)
+    preserved = dict(result)
+    preserved["decision"] = decision
+    preserved["failed"] = decision == "block"
+    if decision != subject_decision:
+        summary = str(preserved.get("summary") or "").strip()
+        preserved["summary"] = (
+            f"{summary}；组合决策：{decision}" if summary else f"组合决策：{decision}"
+        )
+    return preserved
+
+
 def apply_market_data_quality_gate(state: dict) -> dict:
     """Small pure helper for callers that gate before report generation."""
-    result = evaluate_market_data_quality(state.get("market_data_quality"))
+    result = _preserve_stricter_market_decision(
+        evaluate_market_data_quality(state.get("market_data_quality")),
+        state.get("market_data_decision"),
+    )
     update = {
         "market_data_decision": result["decision"],
         "data_quality_failed": bool(result["failed"]),
@@ -323,7 +353,10 @@ def create_quality_gate(
         trade_date = state["trade_date"]
         ticker = state["company_of_interest"]
         unavailable = dict(state.get("analysis_unavailable_capabilities", {}))
-        market_quality_result = evaluate_market_data_quality(state.get("market_data_quality"))
+        market_quality_result = _preserve_stricter_market_decision(
+            evaluate_market_data_quality(state.get("market_data_quality")),
+            state.get("market_data_decision"),
+        )
         evidence_validation = None
         capabilities = state.get("analysis_capabilities")
         missing_tracking_code = (

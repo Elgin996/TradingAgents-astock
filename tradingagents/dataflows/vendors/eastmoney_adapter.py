@@ -24,11 +24,17 @@ class EastmoneyAdapter:
         if self.fetcher is None:
             from ..a_stock import _em_kline_with_amount
 
+            exchange_kwargs = (
+                {"exchange": request.exchange}
+                if request.instrument_type == "index"
+                else {}
+            )
             frame = _em_kline_with_amount(
                 request.symbol,
                 request.start_date.isoformat(),
                 request.end_date.isoformat(),
                 request.adjustment,
+                **exchange_kwargs,
             )
         else:
             frame = self.fetcher(request)

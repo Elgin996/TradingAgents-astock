@@ -15,6 +15,34 @@ def test_stock_profile_has_product_identity():
     assert profile.to_dict()["instrument_id"] == "STOCK:SSE:600000"
 
 
+def test_web_stock_resolution_freezes_v2_profile(monkeypatch):
+    from tradingagents.dataflows import security_master
+    from web.components.sidebar import _resolve_instrument_profile
+
+    record = FundMasterRecord(
+        symbol="600000",
+        exchange="SSE",
+        fund_name="---",
+        fund_type="---",
+        tracking_index_name=None,
+        fund_manager=None,
+        listed_or_established_date=None,
+        management_fee=None,
+        custodian_fee=None,
+        classification="not_a_fund",
+        classification_reason="test",
+    )
+    monkeypatch.setattr(security_master, "resolve_fund_master", lambda code: record)
+
+    mode, profile, error = _resolve_instrument_profile("600000")
+
+    assert error is None
+    assert mode == "stock"
+    assert profile is not None
+    assert profile["analysis_product"] == "a_share_stock"
+    assert profile["security_type"] == "stock"
+
+
 def test_active_etf_is_not_routed_as_tracking_etf():
     fields = {
         "基金全称": "测试主动交易型开放式股票证券投资基金",

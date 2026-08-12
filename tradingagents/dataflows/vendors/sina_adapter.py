@@ -24,10 +24,16 @@ class SinaAdapter:
         if self.fetcher is None:
             from ..a_stock import _sina_kline_fallback
 
+            exchange_kwargs = (
+                {"exchange": request.exchange}
+                if request.instrument_type == "index"
+                else {}
+            )
             frame = _sina_kline_fallback(
                 request.symbol,
                 request.start_date.isoformat(),
                 request.end_date.isoformat(),
+                **exchange_kwargs,
             )
         else:
             frame = self.fetcher(request)

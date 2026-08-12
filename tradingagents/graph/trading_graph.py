@@ -91,6 +91,7 @@ class TradingAgentsGraph:
             callbacks: Optional list of callback handlers (e.g., for tracking LLM/tool stats)
         """
         selected_analysts = list(selected_analysts or DEFAULT_ANALYSTS)
+        self.selected_analysts = tuple(selected_analysts)
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
@@ -723,14 +724,18 @@ class TradingAgentsGraph:
         )
         self.analysis_capabilities = capability_model.to_list()
         self.analysis_unavailable_capabilities = capability_model.unavailable
-        # The stock workflow is compiled at construction time. Rebuild only
-        # ETF runs so existing CLI callers and injected test graphs retain
-        # their stock workflow instance.
-        if analysis_mode == "etf":
-            selected = resolve_analysts(analysis_mode, self.analysis_capabilities)
+        # Product-aware validators are bound when the workflow is built.
+        # Rebuild every v2 product so a stock product bundle cannot reach the
+        # legacy TechnicalEvidenceBundle validator.
+        if analysis_mode == "etf" or analysis_product is not None:
+            selected = (
+                resolve_analysts(analysis_mode, self.analysis_capabilities)
+                if analysis_mode == "etf"
+                else self.selected_analysts
+            )
             if not selected:
                 raise RuntimeError(
-                    "ETF 运行时能力探测后没有可执行的分析师；"
+                    "产品运行时能力探测后没有可执行的分析师；"
                     "请检查行情/基金资料数据源后重试。"
                 )
             self.workflow = self.graph_setup.setup_graph(

@@ -144,8 +144,13 @@ def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, 
     if record.classification == "unsupported_fund":
         return "unsupported", None, f"当前版本不支持该类型：{record.classification_reason}"
     # "not_a_fund": the Eastmoney fund-profile page returned placeholder
-    # fields, confirming this is an ordinary listed equity, not a fund.
-    return "stock", None, None
+    # fields, confirming this is an ordinary listed equity, not a fund. V2
+    # routing requires a frozen stock profile just like the ETF path.
+    from tradingagents.dataflows.instrument import profile_for_stock
+
+    if record.exchange is None:
+        return "unknown", None, "证券主数据无法确认普通股票所属交易所"
+    return "stock", profile_for_stock(code, exchange=record.exchange).to_dict(), None
 
 
 def _apply_user_tracking_index(

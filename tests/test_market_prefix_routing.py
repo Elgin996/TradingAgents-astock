@@ -13,10 +13,12 @@ import pytest
 
 from tradingagents.dataflows import a_stock
 from tradingagents.dataflows.a_stock import (
+    _em_kline_with_amount,
     _em_secid,
     _fmt_yi,
     _get_prefix,
     _index_symbol,
+    _sina_kline_fallback,
     _sina_symbol,
 )
 from tradingagents.dataflows.index_catalog import (
@@ -84,6 +86,35 @@ def test_index_symbol_uses_catalog_exchange():
     assert _index_symbol("000510") == "sh000510"
     assert _index_symbol("399006") == "sz399006"
     assert _index_symbol("000300") == "sh000300"
+
+
+@pytest.mark.unit
+def test_structured_index_fetch_uses_explicit_exchange(monkeypatch):
+    captured = {}
+
+    class _Response:
+        text = "[]"
+
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"data": {"klines": []}}
+
+    def fake_get(url, **kwargs):
+        captured[url] = kwargs["params"]
+        return _Response()
+
+    monkeypatch.setattr(a_stock._requests, "get", fake_get)
+    monkeypatch.setattr(a_stock, "_em_get", fake_get)
+
+    _sina_kline_fallback("000300", exchange="SSE")
+    _em_kline_with_amount("000300", adjustment="raw", exchange="SSE")
+
+    sina_params = next(value for key, value in captured.items() if "sina.com" in key)
+    eastmoney_params = next(value for key, value in captured.items() if "eastmoney.com" in key)
+    assert sina_params["symbol"] == "sh000300"
+    assert eastmoney_params["secid"] == "1.000300"
 
 
 @pytest.mark.unit

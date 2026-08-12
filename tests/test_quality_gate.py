@@ -95,6 +95,39 @@ def test_warn_policy_continues():
     )
 
 
+def test_bundle_observe_only_is_not_promoted_by_subject_quality():
+    llm = MagicMock()
+    llm.invoke.return_value.content = "复审完成"
+    gate = create_quality_gate(
+        llm,
+        selected_analysts=["market"],
+        analysis_mode="etf",
+        analysis_product="passive_equity_etf",
+    )
+    long_ok = ("ETF 自身行情分析。" * 30) + "\n| 项目 | 值 |\n| --- | --- |\n"
+    result = gate(
+        {
+            "trade_date": "2026-05-12",
+            "company_of_interest": "510300",
+            "instrument_profile": {
+                "security_type": "etf",
+                "tracking_index_code": {"value": {"code": "000300"}},
+            },
+            "market_report": long_ok,
+            "market_data_quality": {
+                "grade": "A",
+                "decision": "allow",
+                "source_status": "PRIMARY_OK",
+            },
+            "market_data_decision": "observe_only",
+        }
+    )
+
+    assert result["market_data_decision"] == "observe_only"
+    assert result["data_quality_failed"] is False
+    assert "组合决策：observe_only" in result["data_quality_summary"]
+
+
 def test_etf_exclusion_list_does_not_trigger_forbidden_terms():
     report = """## 不可用维度
 

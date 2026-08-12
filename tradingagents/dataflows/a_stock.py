@@ -718,7 +718,13 @@ def _ths_eps_forecast(code: str) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 
 
-def _sina_kline_fallback(code: str, start_date: str = None, end_date: str = None) -> pd.DataFrame:
+def _sina_kline_fallback(
+    code: str,
+    start_date: str = None,
+    end_date: str = None,
+    *,
+    exchange: str | None = None,
+) -> pd.DataFrame:
     """Fetch daily K-line from Sina HTTP API as mootdx fallback.
 
     Returns DataFrame with columns: Date, Open, High, Low, Close, Volume.
@@ -728,8 +734,9 @@ def _sina_kline_fallback(code: str, start_date: str = None, end_date: str = None
         "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
         "CN_MarketData.getKLineData"
     )
+    exchange_prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}.get(exchange or "")
     params = {
-        "symbol": _sina_symbol(code),
+        "symbol": f"{exchange_prefix}{code}" if exchange_prefix else _sina_symbol(code),
         "scale": "240",  # daily
         "ma": "no",
         "datalen": "800",
@@ -768,14 +775,22 @@ def _em_kline_with_amount(
     start_date: str = None,
     end_date: str = None,
     adjustment: str = "forward",
+    *,
+    exchange: str | None = None,
 ) -> pd.DataFrame:
     """Fetch daily OHLCV + Amount from Eastmoney push2his for ETF liquidity.
 
     Field mapping (verified against push2his kline payload):
     f51=date, f52=open, f53=close, f54=high, f55=low, f56=volume, f57=amount.
     """
+    exchange_prefix = {"SSE": "sh", "SZSE": "sz", "BSE": "bj"}.get(exchange or "")
+    secid = (
+        f"{_EM_MARKET_ID[exchange_prefix]}.{code}"
+        if exchange_prefix
+        else _em_secid(code)
+    )
     params = {
-        "secid": _em_secid(code),
+        "secid": secid,
         "fields1": "f1,f2,f3,f4,f5,f6",
         "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
         "klt": "101",
