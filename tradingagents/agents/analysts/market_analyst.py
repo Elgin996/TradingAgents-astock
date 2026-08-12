@@ -8,11 +8,59 @@ from tradingagents.agents.utils.agent_utils import (
     get_stock_data,
 )
 from tradingagents.dataflows.config import get_config
+from tradingagents.dataflows.market_data_service import (
+    build_technical_evidence,
+    make_market_data_request,
+)
+from datetime import date, datetime, time, timedelta, timezone
 
 
 def create_market_analyst(llm):
 
     def market_analyst_node(state):
+        # During migration, callers may precompute a frozen evidence bundle
+        # offline. In that case the model is a renderer only and cannot select
+        # indicators, calculate values, or invent price levels.
+        if state.get("technical_evidence_bundle"):
+            from tradingagents.technical.evidence import TechnicalEvidenceBundle, render_evidence_bundle
+
+            bundle = state["technical_evidence_bundle"]
+            if not isinstance(bundle, TechnicalEvidenceBundle):
+                bundle = TechnicalEvidenceBundle.model_validate(bundle)
+            report = render_evidence_bundle(bundle)
+            return {
+                "messages": [],
+                "market_report": report,
+                "technical_assessment": bundle.assessment.model_dump(mode="json") if bundle.assessment else None,
+            }
+        if get_config().get("deterministic_technical_analysis", True):
+            from tradingagents.technical.evidence import render_evidence_bundle
+
+            current_date = date.fromisoformat(state["trade_date"])
+            lookback = get_config().get("market_lookback_days") or 30
+            # Download enough pre-history for the longest configured indicator,
+            # while the evidence renderer can still show only the user's window.
+            warmup_days = 400
+            analysis_start = current_date - timedelta(days=lookback)
+            request = make_market_data_request(
+                symbol=state["company_of_interest"],
+                exchange=("BSE" if state["company_of_interest"].startswith(("8", "4")) else "SSE" if state["company_of_interest"].startswith(("5", "6", "9")) else "SZSE"),
+                instrument_type="etf" if state.get("analysis_mode") == "etf" else "stock",
+                start_date=current_date - timedelta(days=warmup_days),
+                end_date=current_date,
+                adjustment="raw",
+                as_of=datetime.combine(current_date, time.min, tzinfo=timezone.utc),
+            )
+            result, bundle = build_technical_evidence(request, display_start=analysis_start)
+            return {
+                "messages": [],
+                "market_report": render_evidence_bundle(bundle),
+                "market_data_quality": result.quality.model_dump(mode="json"),
+                "market_data_decision": result.quality.decision,
+                "market_snapshot_id": result.snapshot_id or "",
+                "technical_assessment": bundle.assessment.model_dump(mode="json") if bundle.assessment else None,
+                "technical_evidence_bundle": bundle.model_dump(mode="json"),
+            }
         current_date = state["trade_date"]
         instrument_context = build_instrument_context(
             state["company_of_interest"], state.get("instrument_profile")

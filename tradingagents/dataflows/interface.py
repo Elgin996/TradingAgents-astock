@@ -23,6 +23,7 @@ from .alpha_vantage import (
     get_global_news as get_alpha_vantage_global_news,
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
+from .vendors.base import classify_legacy_result, classify_exception
 from .a_stock import (
     resolve_ticker,
     get_stock_data as get_astock_stock_data,
@@ -230,7 +231,13 @@ def get_vendor(category: str, method: str = None) -> str:
     return config.get("data_vendors", {}).get(category, "default")
 
 def route_to_vendor(method: str, *args, **kwargs):
-    """Route method calls to appropriate vendor implementation with fallback support."""
+    """Route a legacy tool call with explicit failure classification.
+
+    Older providers return markdown strings, so the router validates empty and
+    known error responses before handing them to an LLM.  Any failed attempt is
+    recorded in the local log and the next configured implementation is tried;
+    capability checks still happen before this loop.
+    """
     # Capability enforcement must precede any vendor fallback. Otherwise an ETF
     # analysis that accidentally reaches get_fundamentals would silently get
     # yfinance/Alpha Vantage data for an unrelated ticker.
@@ -240,7 +247,10 @@ def route_to_vendor(method: str, *args, **kwargs):
 
     category = get_category_for_method(method)
     vendor_config = get_vendor(category, method)
-    primary_vendors = [v.strip() for v in vendor_config.split(',')]
+    if isinstance(vendor_config, str):
+        primary_vendors = [v.strip() for v in vendor_config.split(',')]
+    else:
+        primary_vendors = [str(v).strip() for v in (vendor_config or [])]
 
     if method not in VENDOR_METHODS:
         raise ValueError(f"Method '{method}' not supported")
@@ -252,6 +262,7 @@ def route_to_vendor(method: str, *args, **kwargs):
         if vendor not in fallback_vendors:
             fallback_vendors.append(vendor)
 
+    failures = []
     for vendor in fallback_vendors:
         if vendor not in VENDOR_METHODS[method]:
             continue
@@ -260,8 +271,27 @@ def route_to_vendor(method: str, *args, **kwargs):
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
         try:
-            return impl_func(*args, **kwargs)
-        except AlphaVantageRateLimitError:
-            continue  # Only rate limits trigger fallback
+            result = impl_func(*args, **kwargs)
+            return classify_legacy_result(result, source=vendor)
+        except AlphaVantageRateLimitError as exc:
+            failures.append(f"{vendor}:rate_limited")
+            continue
+        except Exception as exc:
+            mapped = classify_exception(exc)
+            failures.append(f"{vendor}:{mapped.status}")
+            continue
 
-    raise RuntimeError(f"No available vendor for '{method}'")
+    detail = ", ".join(failures) if failures else "no configured implementation"
+    raise RuntimeError(f"No available vendor for '{method}' ({detail})")
+
+
+def get_structured_market_data(request, *, mode: str = "online", snapshot_id: str | None = None):
+    """Structured facade for the new market-data service.
+
+    Legacy LangChain tools continue to call :func:`route_to_vendor`; new
+    callers should use this function so they receive provenance and quality
+    instead of a free-form string.
+    """
+    from .market_data_service import MarketDataService
+
+    return MarketDataService().fetch(request, mode=mode, snapshot_id=snapshot_id)

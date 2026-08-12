@@ -63,6 +63,40 @@ FAILURE_MARKERS = [
 ]
 
 
+def evaluate_market_data_quality(quality) -> dict[str, object]:
+    """Convert a structured data-quality report into downstream gate fields."""
+    if quality is None:
+        return {"decision": None, "failed": False, "summary": ""}
+    if hasattr(quality, "model_dump"):
+        quality = quality.model_dump(mode="json")
+    if not isinstance(quality, dict):
+        return {"decision": "block", "failed": True, "summary": "市场数据质量对象无效"}
+    decision = quality.get("decision", "block")
+    grade = quality.get("grade", "F")
+    flags = quality.get("flags") or []
+    summary = f"市场数据质量：{grade} / {quality.get('source_status', 'UNKNOWN')}；决策：{decision}"
+    if flags:
+        summary += "；原因：" + "、".join(str(flag) for flag in flags)
+    return {"decision": decision, "failed": decision == "block", "summary": summary}
+
+
+def apply_market_data_quality_gate(state: dict) -> dict:
+    """Small pure helper for callers that gate before report generation."""
+    result = evaluate_market_data_quality(state.get("market_data_quality"))
+    update = {
+        "market_data_decision": result["decision"],
+        "data_quality_failed": bool(result["failed"]),
+    }
+    if result["summary"]:
+        update["data_quality_summary"] = result["summary"]
+    if result["failed"]:
+        update["technical_assessment"] = {
+            "stance": "unavailable",
+            "decision": "block",
+        }
+    return update
+
+
 def _is_excluded_occurrence(report: str, pos: int, term: str) -> bool:
     """Recognize local negation and lists under an exclusion lead-in."""
     window = report[
@@ -284,6 +318,8 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
         trade_date = state["trade_date"]
         ticker = state["company_of_interest"]
         unavailable = dict(state.get("analysis_unavailable_capabilities", {}))
+        market_quality_result = evaluate_market_data_quality(state.get("market_data_quality"))
+        evidence_validation = None
         capabilities = state.get("analysis_capabilities")
         missing_tracking_code = analysis_mode == "etf" and not _tracking_index_code(
             state.get("instrument_profile")
@@ -313,6 +349,21 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
         reports = {}
         for analyst_type, field in fields.items():
             reports[field] = state.get(field, "")
+
+        evidence_bundle = state.get("technical_evidence_bundle")
+        if evidence_bundle and reports.get("market_report"):
+            try:
+                from tradingagents.technical.evidence import TechnicalEvidenceBundle
+                from tradingagents.technical.report_validation import validate_report
+
+                if not isinstance(evidence_bundle, TechnicalEvidenceBundle):
+                    evidence_bundle = TechnicalEvidenceBundle.model_validate(evidence_bundle)
+                evidence_validation = validate_report(reports["market_report"], evidence_bundle)
+            except Exception as exc:
+                evidence_validation = {"valid": False, "issues": [f"validator_error:{type(exc).__name__}"]}
+        evidence_failed = bool(evidence_validation is not None and not (
+            evidence_validation.valid if hasattr(evidence_validation, "valid") else evidence_validation.get("valid", False)
+        ))
 
         hard_results = {}
         forbidden_hits_by_analyst: dict[str, list[str]] = {}
@@ -380,6 +431,17 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
             f"### 门控判定\n"
             f"**{verdict}** — {verdict_reason}\n"
         )
+        if market_quality_result["summary"]:
+            summary += f"\n### 市场数据门控\n{market_quality_result['summary']}\n"
+        if evidence_validation is not None:
+            validation_payload = (
+                evidence_validation.model_dump(mode="json")
+                if hasattr(evidence_validation, "model_dump")
+                else evidence_validation
+            )
+            summary += "\n### 技术报告事实核验\n"
+            summary += "通过 ✅" if validation_payload.get("valid") else "失败 ❌：" + "、".join(validation_payload.get("issues", []))
+            summary += "\n"
         if forbidden_hits_by_analyst:
             summary += "\n### 禁用词命中\n" + "\n".join(
                 f"- {ANALYST_NAMES.get(analyst_type, analyst_type)}: {'、'.join(hits)}"
@@ -398,7 +460,13 @@ def create_quality_gate(llm, selected_analysts=None, analysis_mode: str = "stock
 
         return {
             "data_quality_summary": summary,
-            "data_quality_failed": data_quality_failed,
+            "data_quality_failed": data_quality_failed or bool(market_quality_result["failed"]) or evidence_failed,
+            "market_data_decision": market_quality_result["decision"],
+            "technical_report_validation": (
+                evidence_validation.model_dump(mode="json")
+                if hasattr(evidence_validation, "model_dump")
+                else evidence_validation
+            ),
         }
 
     return quality_gate_node

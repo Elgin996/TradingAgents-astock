@@ -1,0 +1,7 @@
+version: quality-v1
+price_relative_tolerance: 0.005
+volume_relative_tolerance: 0.10
+cross_source_sample_size: 5
+stale_after_expected_trading_days: 1
+max_invalid_row_ratio: 0.20
+unknown_adjustment_blocks_long_window: true

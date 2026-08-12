@@ -1,0 +1,17 @@
+version: indicator-config-v1
+sma_periods: [20, 50, 200]
+ema_period: 10
+macd_fast: 12
+macd_slow: 26
+macd_signal: 9
+rsi_period: 14
+boll_period: 20
+boll_std: 2.0
+atr_period: 14
+vwma_period: 20
+mfi_period: 14
+volume_short_period: 5
+volume_long_period: 20
+level_short_period: 20
+level_long_period: 60
+warmup_buffer: 20

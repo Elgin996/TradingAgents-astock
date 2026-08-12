@@ -100,6 +100,21 @@ DEFAULT_CONFIG = {
     # Quality gate policy after analysts finish: "warn" (default) continues into
     # debate with data_quality_failed flagged; "block" ends the graph early.
     "quality_gate_policy": "warn",
+    # Structured market-data routing.  This is separate from the legacy
+    # category vendor map because each instrument has a concrete ordered
+    # fallback policy and a bounded attempt count.
+    "market_data_policy": {
+        "stock_daily": ["mootdx", "sina"],
+        "etf_daily": ["eastmoney", "sina"],
+        "index_daily": ["sina"],
+        "max_attempts": 2,
+        "per_attempt_timeout_seconds": 15,
+    },
+    "market_data_contract_version": "market-data-v1",
+    "data_quality_rule_version": "quality-v1",
+    # Keep the old LLM/tool path as the default during migration. Setting this
+    # true makes the market analyst consume the structured evidence renderer.
+    "deterministic_technical_analysis": True,
     # Data vendor configuration
     # Category-level configuration (default for all tools in category)
     "data_vendors": {

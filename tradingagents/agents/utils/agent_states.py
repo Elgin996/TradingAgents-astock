@@ -1,5 +1,5 @@
 from typing import Annotated, Any
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, TypedDict
 from langgraph.graph import MessagesState
 
 
@@ -77,6 +77,14 @@ class AgentState(MessagesState):
         bool,
         "True when hard checks meet the threshold or detect a critical ETF violation",
     ]
+    # Structured market-data/technical evidence. These fields are optional
+    # during the compatibility migration; old graph checkpoints remain valid.
+    market_data_quality: NotRequired[dict[str, Any]]
+    market_data_decision: NotRequired[str]
+    market_snapshot_id: NotRequired[str]
+    technical_assessment: NotRequired[dict[str, Any]]
+    technical_evidence_bundle: NotRequired[dict[str, Any]]
+    technical_report_validation: NotRequired[dict[str, Any]]
 
     # researcher team discussion step
     investment_debate_state: Annotated[

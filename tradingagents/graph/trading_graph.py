@@ -916,6 +916,11 @@ class TradingAgentsGraph:
             "data_quality_failed": bool(
                 final_state.get("data_quality_failed", False)
             ),
+            "market_data_quality": final_state.get("market_data_quality", {}),
+            "market_data_decision": final_state.get("market_data_decision", ""),
+            "market_snapshot_id": final_state.get("market_snapshot_id", ""),
+            "technical_assessment": final_state.get("technical_assessment", {}),
+            "technical_evidence_bundle": final_state.get("technical_evidence_bundle", {}),
             "instrument_profile": final_state.get(
                 "instrument_profile", self.instrument_profile
             ),

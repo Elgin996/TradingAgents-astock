@@ -986,6 +986,7 @@ LIVE_ONLY_TOOLS = frozenset({
 
 POINT_IN_TIME_TOOLS = frozenset({
     "get_stock_data",
+    "get_index_data",
     "get_indicators",
     "get_balance_sheet",
     "get_cashflow",

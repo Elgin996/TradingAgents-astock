@@ -787,6 +787,17 @@ def display_complete_report(final_state):
     console.print()
     console.print(Rule("Complete Analysis Report", style="bold green"))
     console.print("[bold yellow]⚠️ 免责声明：本报告由 AI 自动生成，仅供学习研究与技术演示，不构成投资建议。[/bold yellow]")
+    market_quality = final_state.get("market_data_quality") or {}
+    if market_quality:
+        console.print(
+            Panel(
+                f"数据质量：{market_quality.get('grade', 'F')} / {market_quality.get('source_status', 'UNKNOWN')}\n"
+                f"决策：{final_state.get('market_data_decision') or market_quality.get('decision', 'block')}\n"
+                f"快照：{final_state.get('market_snapshot_id') or 'unavailable'}",
+                title="Market Data Quality",
+                border_style="red" if market_quality.get("grade") in {"C", "D", "F"} else "green",
+            )
+        )
     console.print()
 
     for key in (
@@ -1061,11 +1072,27 @@ def run_analysis(checkpoint: bool = False):
 
     # Create result directory
     results_dir = Path(config["results_dir"]) / selections["ticker"] / selections["analysis_date"]
-    results_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        results_dir.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        # Managed Windows runners may expose the configured user directory as
+        # read-only. Keep the analysis usable and make the fallback explicit;
+        # normal installations continue to use the configured results_dir.
+        results_dir = Path(config.get("project_dir", Path.cwd())) / ".runtime-results" / selections["ticker"] / selections["analysis_date"]
+        results_dir.mkdir(parents=True, exist_ok=True)
     report_dir = results_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
     log_file = results_dir / "message_tool.log"
-    log_file.touch(exist_ok=True)
+    try:
+        log_file.touch(exist_ok=True)
+    except OSError:
+        fallback_dir = Path(config.get("project_dir", Path.cwd())) / ".runtime-results" / selections["ticker"] / selections["analysis_date"]
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        results_dir = fallback_dir
+        report_dir = results_dir / "reports"
+        report_dir.mkdir(parents=True, exist_ok=True)
+        log_file = results_dir / "message_tool.log"
+        log_file.touch(exist_ok=True)
 
     def save_message_decorator(obj, func_name):
         func = getattr(obj, func_name)

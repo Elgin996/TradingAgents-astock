@@ -1,0 +1,9 @@
+version: technical-signal-v1
+weights:
+  trend: 0.30
+  momentum: 0.25
+  volume: 0.15
+  volatility: 0.15
+  level: 0.15
+observe_only_grades: [C]
+block_grades: [D, F]

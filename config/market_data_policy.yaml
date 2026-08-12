@@ -1,0 +1,11 @@
+version: market-data-policy-v1
+stock_daily:
+  - mootdx
+  - sina
+etf_daily:
+  - eastmoney
+  - sina
+index_daily:
+  - sina
+max_attempts: 2
+per_attempt_timeout_seconds: 15

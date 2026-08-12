@@ -112,6 +112,18 @@ def render_report(
     )
 
     st.caption("⚠️ 本报告由 AI 自动生成，仅供学习研究，不构成投资建议。")
+    market_quality = final_state.get("market_data_quality") or {}
+    if isinstance(market_quality, dict) and market_quality:
+        grade = html.escape(str(market_quality.get("grade", "F")))
+        status = html.escape(str(market_quality.get("source_status", "UNKNOWN")))
+        decision = html.escape(str(final_state.get("market_data_decision") or market_quality.get("decision", "block")))
+        snapshot = html.escape(str(final_state.get("market_snapshot_id") or "unavailable"))
+        alert = "#7f1d1d" if grade in {"C", "D", "F"} or decision == "block" else "#14532d"
+        st.markdown(
+            f'<div style="background:{alert}; padding:0.65rem 1rem; border-radius:8px; margin:0.5rem 0;">'
+            f"数据质量：{grade} / {status} · 决策：{decision} · 快照：{snapshot}</div>",
+            unsafe_allow_html=True,
+        )
     if final_state.get("analysis_mode") == "etf":
         profile = final_state.get("instrument_profile") or {}
         st.caption(

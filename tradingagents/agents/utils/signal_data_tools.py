@@ -7,7 +7,7 @@ from tradingagents.dataflows.interface import route_to_vendor
 @tool
 def get_profit_forecast(
     ticker: Annotated[str, "A-stock code (e.g. 688017)"],
-    curr_date: Annotated[str, "Analysis date in YYYY-MM-DD format (required)"],
+    curr_date: Annotated[str, "Analysis date in YYYY-MM-DD format"] = None,
 ) -> str:
     """
     Retrieve consensus EPS forecasts with forward valuation metrics.

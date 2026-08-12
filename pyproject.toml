@@ -84,7 +84,11 @@ cli = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra --strict-markers -m \"not integration\""
+addopts = "-ra --strict-markers -m \"not integration\" -p no:cacheprovider -p no:tmpdir"
+# Keep pytest's temporary tree in the workspace.  Some Windows runners deny
+# access to the default per-user temp/cache directory.  The cache provider is
+# disabled because it creates an atomic staging directory beside the cache,
+# which is denied by the managed Windows runner.
 markers = [
     "unit: fast isolated unit tests",
     "integration: tests requiring external services",
