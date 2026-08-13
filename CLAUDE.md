@@ -1,5 +1,7 @@
 # TradingAgents-Astock
 
+**当前版本**：0.5.14
+
 ## 项目定位
 
 A 股多 Agent 投研框架，要求 Python 3.10+。

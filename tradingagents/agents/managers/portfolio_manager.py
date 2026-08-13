@@ -21,6 +21,11 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.agents.utils.etf_synthesis_grounding import (
+    grounded_portfolio_decision,
+    has_unsupported_etf_synthesis,
+)
+from tradingagents.agents.utils.rating import parse_rating
 
 
 # Mirrors the Trader: the schema alone cannot stop the model from putting
@@ -160,17 +165,24 @@ Be decisive and ground every conclusion in specific evidence from the analysts.{
             render_pm_decision,
             "Portfolio Manager",
         )
+        if analysis_mode == "etf" or has_unsupported_etf_synthesis(
+            final_trade_decision, state
+        ):
+            final_trade_decision = grounded_portfolio_decision(
+                state, parse_rating(final_trade_decision)
+            )
 
+        etf_mode = analysis_mode == "etf"
         new_risk_debate_state = {
             "judge_decision": final_trade_decision,
-            "history": risk_debate_state["history"],
-            "aggressive_history": risk_debate_state["aggressive_history"],
-            "conservative_history": risk_debate_state["conservative_history"],
-            "neutral_history": risk_debate_state["neutral_history"],
+            "history": "" if etf_mode else risk_debate_state["history"],
+            "aggressive_history": "" if etf_mode else risk_debate_state["aggressive_history"],
+            "conservative_history": "" if etf_mode else risk_debate_state["conservative_history"],
+            "neutral_history": "" if etf_mode else risk_debate_state["neutral_history"],
             "latest_speaker": "Judge",
-            "current_aggressive_response": risk_debate_state["current_aggressive_response"],
-            "current_conservative_response": risk_debate_state["current_conservative_response"],
-            "current_neutral_response": risk_debate_state["current_neutral_response"],
+            "current_aggressive_response": "" if etf_mode else risk_debate_state["current_aggressive_response"],
+            "current_conservative_response": "" if etf_mode else risk_debate_state["current_conservative_response"],
+            "current_neutral_response": "" if etf_mode else risk_debate_state["current_neutral_response"],
             "count": risk_debate_state["count"],
         }
 

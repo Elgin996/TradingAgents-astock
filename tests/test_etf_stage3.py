@@ -91,7 +91,9 @@ def test_peer_comparison_excludes_closed_fields(monkeypatch):
     monkeypatch.setattr(
         etf_data,
         "resolve_fund_master",
-        lambda symbol: _FundRecord(symbol=symbol, fund_name=f"ETF{symbol}"),
+        lambda symbol, **_kwargs: _FundRecord(
+            symbol=symbol, fund_name=f"ETF{symbol}"
+        ),
     )
     monkeypatch.setattr(
         etf_data,

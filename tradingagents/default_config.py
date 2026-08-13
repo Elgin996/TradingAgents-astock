@@ -14,13 +14,17 @@ DEFAULT_CONFIG = {
     # Drop pending memory entries older than this many days (unresolvable
     # tickers otherwise accumulate forever). None disables age-based expiry.
     "memory_pending_max_age_days": 90,
-    # LLM settings — defaults match README「推荐，国内直连」MiniMax section.
-    "llm_provider": "minimax",
-    "deep_think_llm": "MiniMax-M2.7",
-    "quick_think_llm": "MiniMax-M2.7-highspeed",
+    # LLM settings — OpenRouter model IDs use the ``vendor/model`` format.
+    "llm_provider": "openrouter",
+    "deep_think_llm": "deepseek/deepseek-chat",
+    "quick_think_llm": "deepseek/deepseek-chat",
     # Bound worst-case blocking LLM calls (seconds). Passed through to clients
     # that accept a ``timeout`` kwarg. None leaves the client default.
     "llm_timeout": 120,
+    # Provider SDK retry count for transient 408/409/429/5xx errors. None keeps
+    # the SDK default; increase it for shared OpenRouter pools that may briefly
+    # rate-limit one upstream model.
+    "llm_max_retries": None,
     # When None, each provider's client falls back to its own default endpoint
     # (api.openai.com for OpenAI, generativelanguage.googleapis.com for Gemini, ...).
     # The CLI overrides this per provider when the user picks one. Keeping a

@@ -30,6 +30,7 @@ import threading
 import time
 import uuid
 import urllib.request
+from io import StringIO
 from pathlib import Path
 
 import pandas as pd
@@ -619,6 +620,7 @@ _EM_MIN_INTERVAL = float(os.environ.get("EM_MIN_INTERVAL", "1.0"))
 # The interval below spaces request starts; this semaphore bounds requests
 # actually in flight, which slow responses would otherwise let pile up.
 _EM_MAX_INFLIGHT = int(os.environ.get("EM_MAX_INFLIGHT", "4"))
+_EM_NETWORK_ATTEMPTS = max(1, int(os.environ.get("EM_NETWORK_ATTEMPTS", "2")))
 _em_lock = threading.Lock()
 _em_next_free = 0.0  # earliest wall-clock time the next call may start
 _em_inflight = threading.Semaphore(_EM_MAX_INFLIGHT)
@@ -644,19 +646,31 @@ def _em_get(url, params=None, headers=None, timeout=15, **kwargs):
     传入的 headers 会覆盖 session 默认 UA（用于保留各端点自己的 Referer/Origin）。
     """
     global _em_next_free
-    with _em_lock:
-        now = time.time()
-        start_at = max(now, _em_next_free)
-        # Reserve this slot before releasing the lock so concurrent callers queue
-        # behind it instead of all racing the same timestamp.
-        _em_next_free = start_at + _EM_MIN_INTERVAL + random.uniform(0.1, 0.5)
-    delay = start_at - time.time()
-    if delay > 0:
-        time.sleep(delay)
-    with _em_inflight:
-        return _em_session().get(
-            url, params=params, headers=headers, timeout=timeout, **kwargs
-        )
+    for attempt in range(_EM_NETWORK_ATTEMPTS):
+        with _em_lock:
+            now = time.time()
+            start_at = max(now, _em_next_free)
+            # Reserve every retry as its own rate-limited request; otherwise a
+            # transient disconnect can make retries bypass Eastmoney's limits.
+            _em_next_free = (
+                start_at + _EM_MIN_INTERVAL + random.uniform(0.1, 0.5)
+            )
+        delay = start_at - time.time()
+        if delay > 0:
+            time.sleep(delay)
+        try:
+            with _em_inflight:
+                return _em_session().get(
+                    url, params=params, headers=headers, timeout=timeout, **kwargs
+                )
+        except (_requests.ConnectionError, _requests.Timeout):
+            if attempt + 1 >= _EM_NETWORK_ATTEMPTS:
+                raise
+            # Discard a potentially poisoned keep-alive pool before retrying.
+            session = getattr(_em_local, "session", None)
+            if session is not None:
+                session.close()
+                _em_local.session = None
 
 
 def _eastmoney_datacenter(
@@ -703,7 +717,10 @@ def _ths_eps_forecast(code: str) -> pd.DataFrame:
     }
     r = _requests.get(url, headers=headers, timeout=15)
     r.encoding = "gbk"
-    dfs = pd.read_html(r.text)
+    # pandas 2.x no longer treats a literal HTML string as a stable input and
+    # may interpret the entire response body as a filesystem path.  Wrap the
+    # body explicitly so the forecast page is parsed as in-memory HTML.
+    dfs = pd.read_html(StringIO(r.text))
     # Find the table containing EPS data
     for df in dfs:
         cols = [str(c) for c in df.columns]
@@ -822,7 +839,9 @@ def _em_kline_with_amount(
                 "Close": float(parts[2]),
                 "High": float(parts[3]),
                 "Low": float(parts[4]),
-                "Volume": int(float(parts[5])),
+                # Eastmoney f56 is reported in 手 for mainland securities;
+                # normalize the public contract to shares like Sina/mootdx.
+                "Volume": int(float(parts[5]) * 100),
                 "Amount": float(parts[6]),
             }
         )
@@ -898,6 +917,62 @@ def _supplement_stale_ohlcv_with_sina(
         return df, False
     merged = _merge_ohlcv(df, sina_df)
     return merged, _last_ohlcv_date(merged) != _last_ohlcv_date(df)
+
+
+def _etf_liquidity_summary_lines(df: pd.DataFrame) -> list[str]:
+    """Render deterministic volume/amount statistics for ETF agent prompts.
+
+    LLMs are poor spreadsheet engines and previously mismatched dates, sums,
+    and 亿-unit conversions. Keep those facts next to the CSV so the analyst
+    only interprets already-computed values.
+    """
+    if (
+        df is None
+        or df.empty
+        or "Date" not in df.columns
+        or "Volume" not in df.columns
+    ):
+        return []
+    ordered = df.copy()
+    ordered["Date"] = pd.to_datetime(ordered["Date"], errors="coerce")
+    ordered["Volume"] = pd.to_numeric(ordered["Volume"], errors="coerce")
+    ordered = ordered.dropna(subset=["Date", "Volume"]).sort_values("Date")
+    if ordered.empty:
+        return []
+    recent_five = ordered.tail(5)
+    available_twenty = ordered.tail(20)
+    lines = [
+        f"# Deterministic ETF liquidity observations: {len(ordered)} sessions",
+        "# Deterministic latest completed bar date: "
+        f"{ordered.iloc[-1]['Date'].strftime('%Y-%m-%d')}",
+        "# Deterministic latest-5 session dates: "
+        + ",".join(day.strftime("%Y-%m-%d") for day in recent_five["Date"]),
+        "# Deterministic latest-5 average Volume (shares): "
+        f"{recent_five['Volume'].mean():.2f}",
+    ]
+    if len(available_twenty) == 20:
+        lines.append(
+            "# Deterministic latest-20 average Volume (shares): "
+            f"{available_twenty['Volume'].mean():.2f}"
+        )
+    else:
+        lines.extend(
+            [
+                "# Deterministic latest-20 average Volume: UNAVAILABLE "
+                f"(only {len(available_twenty)} sessions supplied)",
+                "# Deterministic supplied-window average Volume "
+                f"(shares; {len(available_twenty)} sessions): "
+                f"{available_twenty['Volume'].mean():.2f}",
+            ]
+        )
+    if "Amount" in ordered.columns:
+        amounts = pd.to_numeric(ordered["Amount"], errors="coerce")
+        if amounts.notna().any():
+            lines.append(
+                "# Deterministic latest-5 average Amount (CNY): "
+                f"{amounts.tail(5).mean():.2f}"
+            )
+    return lines
 
 
 # ---------------------------------------------------------------------------
@@ -1173,6 +1248,10 @@ def get_stock_data(
     header = f"# {instrument_name} data for {code} (A-share) from {start_date} to {end_date}\n"
     header += f"# Total records: {len(df)}\n"
     header += f"# Data source: {data_source}\n"
+    if is_etf_run:
+        liquidity_lines = _etf_liquidity_summary_lines(df)
+        if liquidity_lines:
+            header += "\n".join(liquidity_lines) + "\n"
     if is_etf_run and "Amount" not in df.columns:
         header += (
             "# Note: Amount (成交额) is unavailable from this source; "
@@ -1616,11 +1695,50 @@ def _get_financial_report_sina(
     d = r.json()
 
     result = d.get("result", {}).get("data", {})
-    items = result.get(source_type, [])
-    if not isinstance(items, list) or not items:
-        return pd.DataFrame()
 
-    df = pd.DataFrame(items)
+    # Sina changed this endpoint from the old ``data.fzb`` list format to a
+    # period-keyed ``data.report_list`` mapping. Keep both parsers so cached
+    # or older responses remain usable.
+    items = result.get(source_type, [])
+    if isinstance(items, list) and items:
+        df = pd.DataFrame(items)
+    else:
+        report_list = result.get("report_list", {})
+        if not isinstance(report_list, dict) or not report_list:
+            return pd.DataFrame()
+
+        rows: list[dict[str, object]] = []
+        for report_date, report in report_list.items():
+            if not isinstance(report, dict):
+                continue
+            try:
+                parsed_date = pd.to_datetime(str(report_date), format="%Y%m%d")
+            except (TypeError, ValueError):
+                continue
+            row: dict[str, object] = {"报告日": parsed_date}
+            report_items = report.get("data", [])
+            if not isinstance(report_items, list):
+                continue
+            for item in report_items:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("item_title") or item.get("item_field") or "").strip()
+                if not title:
+                    continue
+                # A few reports contain the same display title twice. Use the
+                # provider field as a stable suffix instead of overwriting a
+                # financial value in the normalized row.
+                column = title
+                field = str(item.get("item_field") or "").strip()
+                if column in row and field:
+                    column = f"{title}（{field}）"
+                row[column] = item.get("item_value")
+            if len(row) > 1:
+                rows.append(row)
+        df = pd.DataFrame(rows)
+
+    if df.empty:
+        return df
 
     # Filter by curr_date
     if curr_date and "报告日" in df.columns:

@@ -1,6 +1,6 @@
 """版本号三处必须一致（codex 第九轮）。
 
-`pyproject.toml` 是权威值，但 `CHANGELOG.md` 的最新条目和 `CLAUDE.md` 的「当前版本」
+`pyproject.toml` 是权威值，但 `docs/CHANGELOG.md` 的最新条目和 `CLAUDE.md` 的「当前版本」
 也各写了一份。这轮就漏了 `CLAUDE.md`——后续 agent 和发版流程读它会拿到旧版本。
 """
 import pathlib
@@ -17,9 +17,9 @@ def _pyproject_version() -> str:
 
 def test_changelog_top_entry_matches_pyproject():
     version = _pyproject_version()
-    text = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    text = (ROOT / "docs" / "CHANGELOG.md").read_text(encoding="utf-8")
     m = re.search(r"^## \[([^\]]+)\]", text, re.M)
-    assert m, "CHANGELOG.md 里找不到版本条目"
+    assert m, "docs/CHANGELOG.md 里找不到版本条目"
     assert m.group(1) == version, (
         f"CHANGELOG 最新条目是 {m.group(1)}，pyproject 是 {version}"
     )

@@ -44,6 +44,10 @@ _NEGATION_MARKERS = (
     "已排除",
     "不提供",
     "不比较",
+    "不使用",
+    "不再使用",
+    "避免使用",
+    "不得使用",
     "禁止",
     "不是",
     "并非",
@@ -61,6 +65,13 @@ FAILURE_MARKERS = [
     "unable to fetch",
     "工具调用失败",
 ]
+
+REPORT_DEFLECTION_MARKERS = (
+    "不构成有效请求",
+    "请提供：",
+    "请提供具体",
+    "需要基于具体ETF代码",
+)
 
 
 def evaluate_market_data_quality(quality) -> dict[str, object]:
@@ -217,6 +228,11 @@ def _hard_check_report(
     """Run hard checks on a single report. Returns (grade, detail, forbidden_hits)."""
     if not report or not report.strip():
         return ("F", "报告为空", [])
+
+    if len(report.strip()) < 400 and any(
+        marker in report for marker in REPORT_DEFLECTION_MARKERS
+    ):
+        return ("F", "分析师错误索取已冻结的代码/日期，未执行任务", [])
 
     length = len(report.strip())
     if analysis_mode == "etf":
@@ -375,6 +391,7 @@ def create_quality_gate(
         fields = dict(base_fields)
         if analysis_mode == "etf" and capabilities is not None:
             from tradingagents.dataflows.analysis_capabilities import (
+                ETF_CAPABILITY_COMPATIBILITY_V2,
                 ETF_ANALYST_REQUIRED_CAPABILITIES,
             )
 
@@ -384,18 +401,10 @@ def create_quality_gate(
             # quality gate aligned with the graph's analyst resolver during
             # the migration window instead of silently dropping every v2 ETF
             # report field.
-            compatibility = {
-                "price_history": "subject_price_history",
-                "technical_indicators": "subject_price_indicators",
-                "liquidity_metrics": "etf_liquidity_metrics",
-                "fund_profile": "fund_profile",
-                "index_news_policy": "tracking_index_identity",
-                "peer_comparison": "peer_comparison",
-            }
-
             def capabilities_cover(required: frozenset[str]) -> bool:
                 return required.issubset(enabled) or all(
-                    compatibility.get(item, item) in enabled for item in required
+                    ETF_CAPABILITY_COMPATIBILITY_V2.get(item, item) in enabled
+                    for item in required
                 )
 
             fields = {
@@ -467,11 +476,23 @@ def create_quality_gate(
         )
         forbidden_term_hit = bool(forbidden_hits_by_analyst)
         identity_conflict_hit = bool(identity_conflicts_by_analyst)
+        critical_etf_report_failure = analysis_mode == "etf" and any(
+            grade in {"D", "F"} for grade, _detail in hard_results.values()
+        )
+        deflection_hit = any(
+            len(reports[field].strip()) < 400
+            and any(marker in reports[field] for marker in REPORT_DEFLECTION_MARKERS)
+            for field in fields.values()
+        )
         # A genuine forbidden-term leak (individual-stock logic in an ETF
         # report) is a standalone blocking signal — it must not need to wait
         # for enough *other* reports to also fail before the run is blocked.
         report_quality_failed = bool(fields) and (
-            fail_count >= threshold or forbidden_term_hit or identity_conflict_hit
+            fail_count >= threshold
+            or forbidden_term_hit
+            or identity_conflict_hit
+            or deflection_hit
+            or critical_etf_report_failure
         )
         data_quality_failed = (
             report_quality_failed
@@ -480,7 +501,7 @@ def create_quality_gate(
         )
 
         llm_review = ""
-        if fields and not data_quality_failed:
+        if fields and not data_quality_failed and analysis_mode != "etf":
             try:
                 review_prompt = _build_review_prompt(
                     reports, trade_date, ticker, fields
@@ -489,6 +510,8 @@ def create_quality_gate(
                 llm_review = response.content
             except Exception as e:
                 llm_review = f"（LLM 复审失败: {type(e).__name__}: {e}）"
+        elif fields and not data_quality_failed and analysis_mode == "etf":
+            llm_review = "（ETF v2 使用确定性硬检查与证据核验，不进行自由文本复审。）"
 
         verdict = "未通过 ❌" if data_quality_failed else "通过 ✅"
         verdict_reason = f"{fail_count} 项硬检查未达标，阈值为 {threshold} 项。"
@@ -496,6 +519,10 @@ def create_quality_gate(
             verdict_reason += " 检测到禁用词命中，独立阻断（不受阈值影响）。"
         if identity_conflict_hit:
             verdict_reason += " 检测到证券类型冲突，独立阻断（不受阈值影响）。"
+        if deflection_hit:
+            verdict_reason += " 检测到分析师拒答/重复索参，独立阻断（不受阈值影响）。"
+        if critical_etf_report_failure:
+            verdict_reason += " ETF 核心报告出现 D/F，独立阻断（不受阈值影响）。"
         if market_quality_result["failed"]:
             verdict_reason += " 市场数据质量决策为阻断。"
         if evidence_failed:

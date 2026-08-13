@@ -85,7 +85,16 @@ def assert_tool_allowed(method: str) -> None:
     if capabilities is None:
         return  # Legacy/stock callers that do not opt into capability routing.
     capability = TOOL_CAPABILITIES.get(method)
-    if capability is not None and capability not in capabilities:
+    if capability is not None:
+        from .analysis_capabilities import ETF_CAPABILITY_COMPATIBILITY_V2
+
+        compatible = ETF_CAPABILITY_COMPATIBILITY_V2.get(capability)
+        allowed = capability in capabilities or (
+            compatible is not None and compatible in capabilities
+        )
+    else:
+        allowed = True
+    if not allowed:
         raise CapabilityError(
             f"工具 {method} 不适用于当前标的；缺少能力 {capability}。"
         )

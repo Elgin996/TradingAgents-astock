@@ -159,13 +159,16 @@ st.markdown(
 def _build_config() -> dict:
     config = DEFAULT_CONFIG.copy()
     config["llm_provider"] = st.session_state.get(
-        "llm_provider", os.getenv("TRADINGAGENTS_LLM_PROVIDER", "minimax")
+        "llm_provider",
+        os.getenv("TRADINGAGENTS_LLM_PROVIDER", DEFAULT_CONFIG["llm_provider"]),
     )
     config["deep_think_llm"] = st.session_state.get(
-        "deep_think_llm", os.getenv("TRADINGAGENTS_DEEP_THINK_LLM", "MiniMax-M2.7")
+        "deep_think_llm",
+        os.getenv("TRADINGAGENTS_DEEP_THINK_LLM", DEFAULT_CONFIG["deep_think_llm"]),
     )
     config["quick_think_llm"] = st.session_state.get(
-        "quick_think_llm", os.getenv("TRADINGAGENTS_QUICK_THINK_LLM", "MiniMax-M2.7-highspeed")
+        "quick_think_llm",
+        os.getenv("TRADINGAGENTS_QUICK_THINK_LLM", DEFAULT_CONFIG["quick_think_llm"]),
     )
     config["openrouter_reasoning_effort"] = st.session_state.get(
         "openrouter_reasoning_effort",

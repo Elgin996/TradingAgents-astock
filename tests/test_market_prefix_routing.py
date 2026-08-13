@@ -118,6 +118,26 @@ def test_structured_index_fetch_uses_explicit_exchange(monkeypatch):
 
 
 @pytest.mark.unit
+def test_eastmoney_kline_volume_is_normalized_from_lots_to_shares(monkeypatch):
+    class _Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "klines": ["2026-08-13,1.40,1.41,1.42,1.39,4045566,570000000"]
+                }
+            }
+
+    monkeypatch.setattr(a_stock, "_em_get", lambda *args, **kwargs: _Response())
+    frame = _em_kline_with_amount("159530", exchange="SZSE")
+
+    assert frame.iloc[0]["Volume"] == 404_556_600
+    assert frame.iloc[0]["Amount"] == 570_000_000
+
+
+@pytest.mark.unit
 def test_index_exchange_covers_catalog_codes():
     catalog_codes = {code for code, _ in _INDEX_CATALOG.values()}
     assert set(INDEX_EXCHANGE_BY_CODE) == catalog_codes

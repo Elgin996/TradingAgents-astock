@@ -318,7 +318,9 @@ class TestTradingMemoryLogCore:
         assert "Future lesson." not in ctx
 
     def test_concurrent_store_decision_does_not_corrupt(self, tmp_path):
-        log = TradingMemoryLog({"memory_log_path": str(tmp_path / "m.md")})
+        # This test isolates concurrent writes; fixed historical fixture dates
+        # must not be removed by the independent pending-entry expiry policy.
+        log = make_log(tmp_path, filename="m.md")
         with ThreadPoolExecutor(max_workers=8) as pool:
             list(
                 pool.map(

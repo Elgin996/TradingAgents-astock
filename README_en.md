@@ -197,7 +197,7 @@ Modify the configuration based on your chosen provider:
 ```python
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-# ── MiniMax Example (Recommended) ──────────────────────────────────────────
+# ── MiniMax Example ────────────────────────────────────────────────────────
 config = {
     "llm_provider": "minimax",
     "deep_think_llm": "MiniMax-M2.7",
@@ -279,6 +279,7 @@ Open your browser and navigate to `http://localhost:8501`.
 ### Features
 
 - **Model Selection**: Sidebar supports switching between 10 LLM providers (MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/OpenRouter/Ollama), plus **"OpenAI Compatible (custom base_url)"** for connecting to any OpenAI-compatible gateway (9Router / AI Router / self-hosted proxy)
+- **Security Type**: Check "This is an ETF" in the sidebar for ETF analysis; otherwise the code is treated as a stock and skips the mootdx securities-master lookup
 - **One-Click Analysis**: Enter a 6-digit A-share stock code + analysis date + "Data Start Date" (defaults to the first day of the current month, allows customizing the technical analysis lookback period, supports monthly/custom period analysis), then click "Start Analysis"
 - **Real-Time Progress**: 12-stage pipeline displayed in real-time (7 Analysts → Quality Gate → Debate → Risk Control → Decision), with expandable reports for all completed stages
 - **Complete Report**: Signal cards (Buy/Hold/Sell), 7 analyst reports, bull-bear debate, risk control assessment
@@ -298,9 +299,9 @@ All configuration is passed in through the `config` dictionary. Complete options
 
 | Parameter | Default Value | Description |
 |------|--------|------|
-| `llm_provider` | `"minimax"` | LLM provider: `minimax` / `deepseek` / `qwen` / `glm` / `openai` / `anthropic` / `google` / `xai` / `ollama` |
-| `deep_think_llm` | `"MiniMax-M2.7"` | Model used by the Research Manager + Portfolio Manager |
-| `quick_think_llm` | `"MiniMax-M2.7-highspeed"` | Model used by all Analysts / Researchers / Traders |
+| `llm_provider` | `"openrouter"` | LLM provider: `openrouter` / `minimax` / `deepseek` / `qwen` / `glm` / `openai` / `anthropic` / `google` / `xai` / `ollama` |
+| `deep_think_llm` | `"deepseek/deepseek-chat"` | Model used by the Research Manager + Portfolio Manager |
+| `quick_think_llm` | `"deepseek/deepseek-chat"` | Model used by all Analysts / Researchers / Traders |
 | `backend_url` | `None` | Custom API endpoint / third-party relay gateway. Can be filled in via the Web UI sidebar or the `.env` file's `BACKEND_URL`; useful for accessing Claude / OpenAI from within China via a proxy |
 | `role_llms` | `{}` | **Optional**: give individual roles a different model (e.g. bull vs bear from different vendors). Empty = every role uses the quick/deep pair as before. See "Per-role models" below. #39 |
 | `max_tokens` | `None` | Max output tokens per reply. `None` = the provider's own default. **If a report stops mid-sentence, raise this first** (it is the output cap, not the context window); also settable via `TRADINGAGENTS_MAX_TOKENS`. #91 |

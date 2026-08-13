@@ -17,6 +17,7 @@ def test_catalog_maps_common_indices():
     assert lookup_tracking_index_code("沪深300指数") == ("000300", "CSI")
     assert lookup_tracking_index_code("创业板指数(价格)") == ("399006", "SZSE")
     assert lookup_tracking_index_code("上证科创板50成份指数") == ("000688", "SSE")
+    assert lookup_tracking_index_code("国证机器人产业指数") == ("980022", "CNI")
     assert lookup_tracking_index_code("中证全指半导体产品与设备指数") is None
 
 

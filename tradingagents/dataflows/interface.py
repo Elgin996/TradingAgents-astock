@@ -23,7 +23,7 @@ from .alpha_vantage import (
     get_global_news as get_alpha_vantage_global_news,
 )
 from .alpha_vantage_common import AlphaVantageRateLimitError
-from .vendors.base import classify_legacy_result, classify_exception
+from .vendors.base import VendorError, classify_legacy_result, classify_exception
 from .a_stock import (
     resolve_ticker,
     get_stock_data as get_astock_stock_data,
@@ -282,7 +282,11 @@ def route_to_vendor(method: str, *args, **kwargs):
             continue
 
     detail = ", ".join(failures) if failures else "no configured implementation"
-    raise RuntimeError(f"No available vendor for '{method}' ({detail})")
+    # Keep the typed vendor failure all the way to the agent/tool boundary.
+    # ``VendorError`` remains a RuntimeError subclass for compatibility, while
+    # allowing LangGraph's ToolNode to degrade only external data failures and
+    # continue surfacing unrelated programming errors.
+    raise VendorError(f"No available vendor for '{method}' ({detail})")
 
 
 def get_structured_market_data(request, *, mode: str = "online", snapshot_id: str | None = None):

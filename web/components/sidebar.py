@@ -123,10 +123,15 @@ def _resolve_user_input(raw: str) -> tuple[str, str | None]:
 
 def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, str | None]:
     """Return the mode and a recognized ETF profile when one is available."""
+    from tradingagents.dataflows.a_stock import resolve_a_share_exchange
     from tradingagents.dataflows.security_master import resolve_fund_master
 
     try:
-        record = resolve_fund_master(code)
+        # The checkbox already establishes that this is an ETF. Derive the
+        # exchange from the six-digit code instead of probing mootdx TCP 7709.
+        record = resolve_fund_master(
+            code, exchange=resolve_a_share_exchange(code)
+        )
     except ValueError as exc:
         # Any parse/lookup failure (Eastmoney profile page changed, code
         # absent from the securities master, etc.) is ambiguous and must not
@@ -151,6 +156,25 @@ def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, 
     if record.exchange is None:
         return "unknown", None, "证券主数据无法确认普通股票所属交易所"
     return "stock", profile_for_stock(code, exchange=record.exchange).to_dict(), None
+
+
+def _resolve_stock_profile(code: str) -> tuple[str, dict[str, Any] | None, str | None]:
+    """Build a stock profile locally without querying the securities master.
+
+    The user has already identified the instrument type with the ETF checkbox,
+    so ordinary stocks do not need the mootdx-backed exchange membership
+    lookup.  Exchange is derived from the A-share code prefix, which is enough
+    for routing the stock data adapters.
+    """
+    from tradingagents.dataflows.a_stock import resolve_a_share_exchange
+    from tradingagents.dataflows.instrument import profile_for_stock
+
+    try:
+        exchange = resolve_a_share_exchange(code)
+        profile = profile_for_stock(code, exchange=exchange).to_dict()
+        return "stock", profile, None
+    except Exception as exc:
+        return "unknown", None, f"股票代码无法识别：{exc}"
 
 
 def _apply_user_tracking_index(
@@ -331,7 +355,9 @@ def _render_analysis_controls(raw_ticker: str, trade_date_value: date) -> None:
 def _render_llm_config() -> None:
     """Render LLM provider and model selection controls."""
 
-    configured_provider = os.getenv("TRADINGAGENTS_LLM_PROVIDER", "").strip().lower()
+    configured_provider = os.getenv(
+        "TRADINGAGENTS_LLM_PROVIDER", DEFAULT_CONFIG["llm_provider"]
+    ).strip().lower()
     provider_default = (
         _PROVIDER_KEYS.index(configured_provider)
         if configured_provider in _PROVIDER_KEYS
@@ -378,12 +404,16 @@ def _render_llm_config() -> None:
     else:
         custom_quick = st.text_input(
             "快速思考模型 ID",
-            value=os.getenv("TRADINGAGENTS_QUICK_THINK_LLM", ""),
+            value=os.getenv(
+                "TRADINGAGENTS_QUICK_THINK_LLM", DEFAULT_CONFIG["quick_think_llm"]
+            ),
             key="custom_quick_model",
         )
         custom_deep = st.text_input(
             "深度思考模型 ID",
-            value=os.getenv("TRADINGAGENTS_DEEP_THINK_LLM", ""),
+            value=os.getenv(
+                "TRADINGAGENTS_DEEP_THINK_LLM", DEFAULT_CONFIG["deep_think_llm"]
+            ),
             key="custom_deep_model",
         )
         st.session_state["quick_think_llm"] = custom_quick
@@ -492,6 +522,11 @@ def render_sidebar() -> None:
         key="input_ticker",
         help="输入6位A股/ETF代码或中文证券全称",
     )
+    is_etf = st.checkbox(
+        "这是 ETF",
+        key="input_is_etf",
+        help="勾选后按 ETF 处理；不勾选则按普通股票处理。普通股票不会查询 mootdx 证券主数据。",
+    )
 
     trade_date = st.date_input(
         "分析日期",
@@ -526,10 +561,18 @@ def render_sidebar() -> None:
     instrument_error: str | None = None
     if resolved_code:
         cache = st.session_state.setdefault("resolved_instrument_profiles", {})
-        cache_key = (resolved_code, trade_date.strftime("%Y-%m-%d"))
+        cache_key = (
+            resolved_code,
+            trade_date.strftime("%Y-%m-%d"),
+            "etf" if is_etf else "stock",
+        )
         cached = cache.get(cache_key)
         if cached is None:
-            cached = _resolve_instrument_profile(resolved_code)
+            cached = (
+                _resolve_instrument_profile(resolved_code)
+                if is_etf
+                else _resolve_stock_profile(resolved_code)
+            )
             # Cache confirmed profiles only. A transient master-data timeout
             # must remain retryable on the next Streamlit rerun.
             if cached[2] is None:

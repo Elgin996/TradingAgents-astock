@@ -17,6 +17,11 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.agents.utils.etf_synthesis_grounding import (
+    grounded_trader_proposal,
+    has_unsupported_etf_synthesis,
+)
+from tradingagents.agents.utils.rating import parse_rating
 
 # The schema alone cannot stop the model from putting price levels into the
 # free-text reasoning field, so the prompt says it explicitly too.
@@ -108,6 +113,12 @@ def create_trader(llm):
             render_trader_proposal,
             "Trader",
         )
+        if analysis_mode == "etf" or has_unsupported_etf_synthesis(
+            trader_plan, state
+        ):
+            trader_plan = grounded_trader_proposal(
+                state, parse_rating(trader_plan)
+            )
 
         return {
             "messages": [AIMessage(content=trader_plan)],

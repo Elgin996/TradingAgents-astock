@@ -210,7 +210,7 @@ BACKEND_URL=https://your-relay.example/v1   # 你的网关地址（也可在 Web
 ```python
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
-# ── MiniMax 示例（推荐）─────────────────────────────
+# ── MiniMax 示例─────────────────────────────────────
 config = {
     "llm_provider": "minimax",
     "deep_think_llm": "MiniMax-M2.7",
@@ -293,6 +293,7 @@ streamlit run web/app.py
 ### 功能
 
 - **模型自选**：侧边栏支持 10 个 LLM 供应商切换（MiniMax/DeepSeek/Qwen/GLM/OpenAI/Anthropic/Google/xAI/OpenRouter/Ollama），外加 **「OpenAI 兼容（自定义 base_url）」** 一档可接任意 OpenAI 兼容网关（9Router / AI Router / 自建代理）
+- **证券类型**：侧栏勾选「这是 ETF」后按 ETF 分析；不勾选按普通股票分析，普通股票不会查询 mootdx 证券主数据
 - **一键分析**：输入 6 位 A 股代码 + 分析日期 +「数据起始日期」（默认本月第一天，可自定义技术分析回溯区间，支持按月/自定义时段分析），点击「开始分析」
 - **实时进度**：12 阶段 pipeline 实时显示（7 分析师 → 质量门控 → 辩论 → 风控 → 决策），所有已完成阶段的报告均可展开查看
 - **完整报告**：信号卡片（Buy/Hold/Sell）、7 份分析师报告、多空辩论、风控评估
@@ -313,9 +314,9 @@ streamlit run web/app.py
 
 | 参数 | 默认值 | 说明 |
 |------|--------|------|
-| `llm_provider` | `"minimax"` | LLM 提供商：`minimax` / `deepseek` / `qwen` / `glm` / `openai` / `anthropic` / `google` / `xai` / `ollama` |
-| `deep_think_llm` | `"MiniMax-M2.7"` | Research Manager + Portfolio Manager 用的模型 |
-| `quick_think_llm` | `"MiniMax-M2.7-highspeed"` | 所有 Analyst / Researcher / Trader 用的模型 |
+| `llm_provider` | `"openrouter"` | LLM 提供商：`openrouter` / `minimax` / `deepseek` / `qwen` / `glm` / `openai` / `anthropic` / `google` / `xai` / `ollama` |
+| `deep_think_llm` | `"deepseek/deepseek-chat"` | Research Manager + Portfolio Manager 用的模型 |
+| `quick_think_llm` | `"deepseek/deepseek-chat"` | 所有 Analyst / Researcher / Trader 用的模型 |
 | `backend_url` | `None` | 自定义 API 端点 / 第三方中转网关。可在 Web UI 侧边栏填写，或用 `.env` 的 `BACKEND_URL`；方便国内通过代理访问 Claude / OpenAI |
 | `role_llms` | `{}` | **可选**：给单个角色指定另一家模型（如多空辩手用不同厂商），留空 = 全部沿用 quick/deep 两档，行为不变。见下方「分角色模型」 #39 |
 | `max_tokens` | `None` | 单次回复的最大输出 token 数。`None` = 用 provider 默认值。**报告写到一半就断，先调这里**（不是上下文超长）；也可用环境变量 `TRADINGAGENTS_MAX_TOKENS`。#91 |
@@ -588,5 +589,3 @@ config["agent_sdk_quick_model"] = "sonnet"    # 分析师节点
 #### 依赖说明
 
 `[agentsdk]` 的依赖链是 `claude-agent-sdk → mcp → httpx2`，**不碰 httpx**，与 mootdx 的 `httpx<0.26` 无冲突（已 `uv lock` 实测）——和 #87 里被移除的 `[google]` 情况不同，不需要单开 venv。
-
-

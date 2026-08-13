@@ -23,6 +23,7 @@ from tradingagents.agents.utils.agent_states import (
     RiskDebateState,
 )
 from tradingagents.dataflows.config import set_config
+from tradingagents.dataflows.vendors.base import VendorError
 
 # Import the new abstract tool methods from agent_utils
 from tradingagents.agents.utils.agent_utils import (
@@ -70,6 +71,25 @@ _PROVIDER_SPECIFIC_KWARGS = frozenset({
     "thinking_level",     # google
     "effort",             # anthropic
 })
+
+
+def _handle_vendor_error(exc: VendorError) -> str:
+    """Turn an exhausted external-data route into explicit missing evidence.
+
+    Analyst prompts already require missing data to be disclosed.  Returning a
+    ToolMessage here lets the analyst finish with that disclosure, while the
+    narrow ``VendorError`` annotation ensures code bugs still abort the run.
+    """
+    return (
+        "DATA_UNAVAILABLE: external data vendors could not satisfy this tool "
+        f"request ({exc}). Treat this source as missing, disclose the limitation "
+        "in the report, do not invent values, and continue with other evidence."
+    )
+
+
+def _vendor_resilient_tool_node(tools) -> ToolNode:
+    """Build a ToolNode that degrades typed vendor outages, and only those."""
+    return ToolNode(tools, handle_tool_errors=_handle_vendor_error)
 
 
 class TradingAgentsGraph:
@@ -348,6 +368,10 @@ class TradingAgentsGraph:
         if timeout is not None:
             kwargs["timeout"] = timeout
 
+        max_retries = self.config.get("llm_max_retries")
+        if max_retries is not None:
+            kwargs["max_retries"] = int(max_retries)
+
         # 与 provider 无关：单次回复的输出上限。撞上它就是报告写一半被截断（#91）。
         max_tokens = self.config.get("max_tokens")
         if max_tokens:
@@ -378,7 +402,7 @@ class TradingAgentsGraph:
     def _create_tool_nodes(self) -> Dict[str, ToolNode]:
         """Create tool nodes for different data sources using abstract methods."""
         return {
-            "market": ToolNode(
+            "market": _vendor_resilient_tool_node(
                 [
                     # Core stock / index data tools
                     get_stock_data,
@@ -387,7 +411,7 @@ class TradingAgentsGraph:
                     get_indicators,
                 ]
             ),
-            "social": ToolNode(
+            "social": _vendor_resilient_tool_node(
                 [
                     # 情绪分析不只读新闻：资金流是最硬的情绪证据，量价给强度，
                     # 强势股榜给热度归因，新闻负责解释成因（#61）。
@@ -397,7 +421,7 @@ class TradingAgentsGraph:
                     get_stock_data,
                 ]
             ),
-            "news": ToolNode(
+            "news": _vendor_resilient_tool_node(
                 [
                     # News and insider information
                     get_news,
@@ -405,7 +429,7 @@ class TradingAgentsGraph:
                     get_insider_transactions,
                 ]
             ),
-            "fundamentals": ToolNode(
+            "fundamentals": _vendor_resilient_tool_node(
                 [
                     get_fundamentals,
                     get_balance_sheet,
@@ -415,13 +439,13 @@ class TradingAgentsGraph:
                     get_industry_comparison,
                 ]
             ),
-            "policy": ToolNode(
+            "policy": _vendor_resilient_tool_node(
                 [
                     get_news,
                     get_global_news,
                 ]
             ),
-            "hot_money": ToolNode(
+            "hot_money": _vendor_resilient_tool_node(
                 [
                     get_stock_data,
                     get_news,
@@ -434,7 +458,7 @@ class TradingAgentsGraph:
                     get_industry_comparison,
                 ]
             ),
-            "lockup": ToolNode(
+            "lockup": _vendor_resilient_tool_node(
                 [
                     get_insider_transactions,
                     get_news,
@@ -442,16 +466,16 @@ class TradingAgentsGraph:
                     get_lockup_expiry,
                 ]
             ),
-            "etf_liquidity": ToolNode(
+            "etf_liquidity": _vendor_resilient_tool_node(
                 [get_stock_data, get_etf_quote]
             ),
-            "etf_structure": ToolNode(
+            "etf_structure": _vendor_resilient_tool_node(
                 [get_etf_profile, get_etf_shares_aum]
             ),
-            "etf_index_news": ToolNode(
+            "etf_index_news": _vendor_resilient_tool_node(
                 [get_news, get_global_news, get_etf_announcements]
             ),
-            "etf_compare": ToolNode(
+            "etf_compare": _vendor_resilient_tool_node(
                 [get_etf_peer_comparison, get_etf_structure_alerts]
             ),
         }

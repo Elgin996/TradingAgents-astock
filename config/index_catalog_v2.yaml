@@ -1,7 +1,18 @@
 version: index-catalog-v2
 source: curated
-source_as_of: 2026-08-12
+source_as_of: 2026-08-13
 records:
+  - instrument_id: CNI:980022:price
+    code: "980022"
+    name: 国证机器人产业指数
+    aliases: [国证机器人产业, 国证机器人产业价格指数]
+    provider: CNI
+    exchange_route: sz
+    series_variant: price
+    currency: CNY
+    timezone: Asia/Shanghai
+    source: 易方达基金官网（159530 基金档案）
+    source_as_of: 2026-08-13
   - instrument_id: CSI:000300:price
     code: "000300"
     name: 沪深300指数

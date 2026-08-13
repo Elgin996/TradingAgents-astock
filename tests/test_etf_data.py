@@ -47,7 +47,7 @@ def test_capability_probe_removes_only_failed_sources(monkeypatch):
     monkeypatch.setattr(etf_data, "get_etf_shares_aum", lambda symbol: ok)
     monkeypatch.setattr(etf_data, "get_etf_announcements", lambda symbol, date: ok)
 
-    unavailable = etf_data.probe_etf_capabilities("510300", "2026-08-07")
+    unavailable = etf_data.probe_etf_capabilities("510300", _TODAY)
 
     assert unavailable == {"liquidity_metrics": "source unavailable"}
 
@@ -78,7 +78,7 @@ def test_peer_comparison_resolves_subject_profile_exactly_once(monkeypatch):
     """§5.3: get_etf_peer_comparison must not re-resolve the subject's profile."""
     calls: list[str] = []
 
-    def _resolve(symbol):
+    def _resolve(symbol, **_kwargs):
         calls.append(symbol)
         return _FundRecord(symbol=symbol, fund_name=f"ETF{symbol}")
 

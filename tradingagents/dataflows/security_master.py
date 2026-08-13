@@ -177,8 +177,12 @@ def _classify(fields: dict[str, str]) -> tuple[FundClassification, str]:
 
 
 @lru_cache(maxsize=512)
-def _resolve_fund_master_cached(symbol: str, as_of: str) -> FundMasterRecord:
-    """Cached resolver keyed by symbol and calendar day."""
+def _resolve_fund_master_cached(
+    symbol: str,
+    as_of: str,
+    exchange: Literal["SSE", "SZSE"] | None = None,
+) -> FundMasterRecord:
+    """Cached resolver keyed by symbol, day, and optional user-routed exchange."""
     del as_of  # cache key only
     code = safe_ticker_component(symbol)
     try:
@@ -189,12 +193,13 @@ def _resolve_fund_master_cached(symbol: str, as_of: str) -> FundMasterRecord:
 
     classification, reason = _classify(fields)
     exchange: Literal["SSE", "SZSE"] | None
-    try:
-        exchange = _lookup_exchange(code)
-    except ValueError:
-        if classification == "domestic_equity_etf":
-            raise
-        exchange = None
+    if exchange is None:
+        try:
+            exchange = _lookup_exchange(code)
+        except ValueError:
+            if classification == "domestic_equity_etf":
+                raise
+            exchange = None
 
     tracking_index_name = fields.get("跟踪标的")
     tracking_index_code = None
@@ -230,9 +235,21 @@ def _resolve_fund_master_cached(symbol: str, as_of: str) -> FundMasterRecord:
     )
 
 
-def resolve_fund_master(symbol: str) -> FundMasterRecord:
-    """Resolve and classify one fund without inferring its exchange or type."""
-    return _resolve_fund_master_cached(safe_ticker_component(symbol), date.today().isoformat())
+def resolve_fund_master(
+    symbol: str,
+    *,
+    exchange: Literal["SSE", "SZSE"] | None = None,
+) -> FundMasterRecord:
+    """Resolve and classify one fund.
+
+    Callers that already know the instrument is an ETF may provide its
+    exchange derived from the six-digit code. This avoids the mootdx-backed
+    securities-master lookup while retaining the independent lookup for legacy
+    callers that do not provide an exchange.
+    """
+    return _resolve_fund_master_cached(
+        safe_ticker_component(symbol), date.today().isoformat(), exchange
+    )
 
 
 def clear_fund_master_caches() -> None:

@@ -114,7 +114,7 @@ def test_etf_structure_alerts_rejects_past_trade_date_with_no_numeric_values(mon
 
 def test_etf_peer_comparison_rejects_past_trade_date_with_no_numeric_values(monkeypatch):
     monkeypatch.setattr(
-        etf_data, "resolve_fund_master", lambda symbol: (_ for _ in ()).throw(
+        etf_data, "resolve_fund_master", lambda symbol, **_kwargs: (_ for _ in ()).throw(
             AssertionError("must not resolve fund master for a rejected past date")
         )
     )

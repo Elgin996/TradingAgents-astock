@@ -244,6 +244,19 @@ def render_product_evidence_bundle(bundle: ProductTechnicalEvidenceBundle) -> st
         lines.append(
             f"共同观察：{bundle.alignment.common_observations} / coverage={bundle.alignment.common_coverage:.4f}"
         )
+    lines.extend(
+        [
+            "",
+            "## 技术状态汇总",
+            "| 项目 | 状态 |",
+            "| --- | --- |",
+            f"| 产品 | {assessment.get('product_state', 'unavailable')} |",
+            f"| ETF/主体价格 | {assessment.get('subject_stance', 'unavailable')} |",
+            f"| 参考指数/基准 | {assessment.get('reference_stance', 'unavailable')} |",
+            f"| 价格路径关系 | {assessment.get('alignment_state', 'unavailable')} |",
+            f"| 流动性 | {assessment.get('liquidity_state', 'unavailable')} |",
+        ]
+    )
     if bundle.unavailable_capabilities:
         lines.extend(["", "数据限制："])
         lines.extend(f"- {key}：{value}" for key, value in bundle.unavailable_capabilities.items())

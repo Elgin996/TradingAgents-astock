@@ -11,7 +11,7 @@ from typing import Any
 
 import pandas as pd
 
-from .a_stock import _em_get, _tencent_quote
+from .a_stock import _em_get, _tencent_quote, resolve_a_share_exchange
 from .instrument import DataPoint
 from .security_master import resolve_fund_master
 
@@ -93,7 +93,9 @@ def get_etf_profile(symbol: str) -> str:
     """Return validated fund identity fields from the phase-0 security master."""
     retrieved_at = _now()
     try:
-        record = resolve_fund_master(symbol)
+        record = resolve_fund_master(
+            symbol, exchange=resolve_a_share_exchange(symbol)
+        )
         return _render(
             {
                 "fund_name": DataPoint(record.fund_name, None, None, retrieved_at, "Eastmoney FundF10", "ok"),
@@ -300,7 +302,9 @@ def _peer_row(
 ) -> dict[str, Any] | None:
     if record is None:
         try:
-            record = resolve_fund_master(symbol)
+            record = resolve_fund_master(
+                symbol, exchange=resolve_a_share_exchange(symbol)
+            )
         except Exception as exc:
             return {
                 "symbol": symbol,
@@ -347,7 +351,9 @@ def get_etf_peer_comparison(
     if refusal is not None:
         return _render({"peer_comparison": refusal})
     try:
-        record = resolve_fund_master(symbol)
+        record = resolve_fund_master(
+            symbol, exchange=resolve_a_share_exchange(symbol)
+        )
         index_name = record.tracking_index_name
         if not index_name:
             raise RuntimeError("缺少跟踪指数名称，无法发现同类 ETF")

@@ -12,6 +12,11 @@ from tradingagents.agents.utils.structured import (
     bind_structured,
     invoke_structured_or_freetext,
 )
+from tradingagents.agents.utils.etf_synthesis_grounding import (
+    grounded_research_plan,
+    has_unsupported_etf_synthesis,
+)
+from tradingagents.agents.utils.rating import parse_rating
 
 
 def create_research_manager(llm):
@@ -55,6 +60,12 @@ Mode-specific synthesis rule: {mode_rules}
 
 Evidence constraints: {evidence_lexicon}
 
+Unavailable or closed capabilities are limitations only. Do not turn IOPV,
+premium/discount, formal tracking-error, index weights, PCF, or realtime holdings
+into numeric triggers when this run has no such data. Preserve units: Volume is
+shares and Amount/turnover value is CNY. Do not prescribe position sizes, fractions
+of daily volume, or exact transaction percentages in Strategic Actions.
+
 ---
 
 **Rating Scale** (use exactly one):
@@ -78,12 +89,22 @@ Commit to a clear stance whenever the debate's strongest arguments warrant one; 
             render_research_plan,
             "Research Manager",
         )
+        if state.get("analysis_mode") == "etf" or has_unsupported_etf_synthesis(
+            investment_plan, state
+        ):
+            investment_plan = grounded_research_plan(
+                state, parse_rating(investment_plan)
+            )
 
+        etf_mode = state.get("analysis_mode") == "etf"
         new_investment_debate_state = {
             "judge_decision": investment_plan,
-            "history": investment_debate_state.get("history", ""),
-            "bear_history": investment_debate_state.get("bear_history", ""),
-            "bull_history": investment_debate_state.get("bull_history", ""),
+            # Preserve the model rating via the grounded judge decision. Free
+            # debate prose is omitted for ETFs because it is not independently
+            # validated against the closed-capability boundary.
+            "history": "" if etf_mode else investment_debate_state.get("history", ""),
+            "bear_history": "" if etf_mode else investment_debate_state.get("bear_history", ""),
+            "bull_history": "" if etf_mode else investment_debate_state.get("bull_history", ""),
             "current_response": investment_plan,
             "count": investment_debate_state["count"],
         }

@@ -138,6 +138,72 @@ def test_etf_exclusion_list_does_not_trigger_forbidden_terms():
     assert find_forbidden_term_hits(report) == []
 
 
+def test_etf_inline_non_use_statement_does_not_trigger_forbidden_terms():
+    report = (
+        "以上分析仅使用 ETF 数据；不再使用公司收入、管理层、锁定期或龙虎榜等"
+        "非允许信息。"
+    )
+    assert find_forbidden_term_hits(report) == []
+
+
+def test_etf_deflection_is_a_standalone_quality_failure():
+    valid = ("ETF 报告。" * 50) + "\n| 项目 | 值 |\n| --- | --- |\n"
+    deflection = "您发送的 Continue 不构成有效请求。请提供：ETF代码和日期。"
+    llm = MagicMock()
+    gate = create_quality_gate(
+        llm,
+        selected_analysts=["market", "etf_liquidity"],
+        analysis_mode="etf",
+    )
+    result = gate(
+        {
+            "trade_date": "2026-08-13",
+            "company_of_interest": "159530",
+            "market_report": valid,
+            "etf_liquidity_report": deflection,
+        }
+    )
+    assert result["data_quality_failed"] is True
+    assert "拒答/重复索参" in result["data_quality_summary"]
+
+
+def test_any_enabled_etf_d_or_f_report_is_a_standalone_failure():
+    valid = ("ETF 报告。" * 50) + "\n| 项目 | 值 |\n| --- | --- |\n"
+    llm = MagicMock()
+    gate = create_quality_gate(
+        llm,
+        selected_analysts=["market", "etf_index_news"],
+        analysis_mode="etf",
+    )
+    result = gate(
+        {
+            "trade_date": "2026-08-13",
+            "company_of_interest": "159530",
+            "market_report": valid,
+            "etf_index_news_report": "<plugin tool call that was never executed>",
+        }
+    )
+    assert result["data_quality_failed"] is True
+    assert "ETF 核心报告出现 D/F" in result["data_quality_summary"]
+
+
+def test_etf_quality_review_is_deterministic_and_skips_llm():
+    valid = ("ETF 报告。" * 50) + "\n| 项目 | 值 |\n| --- | --- |\n"
+    llm = MagicMock()
+    gate = create_quality_gate(
+        llm, selected_analysts=["market"], analysis_mode="etf"
+    )
+    result = gate(
+        {
+            "trade_date": "2026-08-13",
+            "company_of_interest": "159530",
+            "market_report": valid,
+        }
+    )
+    llm.invoke.assert_not_called()
+    assert "确定性硬检查与证据核验" in result["data_quality_summary"]
+
+
 def test_etf_identity_conflict_is_a_standalone_failure():
     assert find_etf_identity_conflicts("标的为深交所上市 LOF。") == ["LOF"]
     assert find_etf_identity_conflicts("该产品并非 LOF，而是 ETF。") == []

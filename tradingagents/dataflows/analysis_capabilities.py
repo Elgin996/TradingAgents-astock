@@ -23,6 +23,20 @@ ETF_PHASE_THREE_CAPABILITIES = frozenset(
     }
 )
 ETF_ENABLED_CAPABILITIES = ETF_PHASE_ONE_CAPABILITIES | ETF_PHASE_THREE_CAPABILITIES
+
+# The v2 product model uses series-specific names, while the ETF analyst tools
+# still declare the phase-1 capability names.  Keep the translation in one
+# place so graph pruning, runtime guards, quality checks, and probe failures all
+# make the same decision.
+ETF_CAPABILITY_COMPATIBILITY_V2: dict[str, str] = {
+    "price_history": "subject_price_history",
+    "technical_indicators": "subject_price_indicators",
+    "liquidity_metrics": "etf_liquidity_metrics",
+    "fund_profile": "fund_profile",
+    "shares_and_aum": "etf_shares_and_aum",
+    "index_news_policy": "etf_index_news_policy",
+    "peer_comparison": "etf_peer_comparison",
+}
 PHASE_CLOSED_CAPABILITIES = {
     "nav_iopv": "阶段 1.5 已关闭：无稳定、可审计的 IOPV 数据源",
     "premium_discount": "阶段 1.5 已关闭：无法保证价格与 IOPV 同时点可比",
@@ -70,6 +84,9 @@ PRODUCT_CAPABILITIES_V2: dict[str, frozenset[str]] = {
             "subject_amount_indicators",
             "etf_liquidity_metrics",
             "fund_profile",
+            "etf_shares_and_aum",
+            "etf_index_news_policy",
+            "etf_peer_comparison",
             "tracking_index_identity",
             "tracking_index_price_history",
             "tracking_index_price_indicators",
@@ -86,6 +103,9 @@ PRODUCT_CAPABILITIES_V2: dict[str, frozenset[str]] = {
             "subject_amount_indicators",
             "etf_liquidity_metrics",
             "fund_profile",
+            "etf_shares_and_aum",
+            "etf_index_news_policy",
+            "etf_peer_comparison",
             "benchmark_price_history",
             "benchmark_relative_strength",
         }
@@ -170,7 +190,15 @@ class AnalysisCapabilities:
             raise ValueError(
                 f"{analysis_product} requires security_type={expected_security}"
             )
-        unavailable_map = {**V2_CLOSED_CAPABILITIES, **(unavailable or {})}
+        # Runtime probes currently report the phase-1 names.  Translate them
+        # before subtracting from the v2 set; otherwise a failed quote probe
+        # removes ``liquidity_metrics`` while incorrectly leaving
+        # ``etf_liquidity_metrics`` enabled.
+        translated_unavailable = {
+            ETF_CAPABILITY_COMPATIBILITY_V2.get(name, name): reason
+            for name, reason in (unavailable or {}).items()
+        }
+        unavailable_map = {**V2_CLOSED_CAPABILITIES, **translated_unavailable}
         reference_payload = instrument_profile.get("reference_instrument")
         reference_ready = False
         if isinstance(reference_payload, dict):
@@ -285,18 +313,11 @@ def filter_etf_analysts(
         return tuple(analysts)
     enabled = frozenset(capabilities)
     kept: list[str] = []
-    compatibility = {
-        "price_history": "subject_price_history",
-        "technical_indicators": "subject_price_indicators",
-        "liquidity_metrics": "etf_liquidity_metrics",
-        "fund_profile": "fund_profile",
-        "index_news_policy": "tracking_index_identity",
-        "peer_comparison": "peer_comparison",
-    }
     for analyst in analysts:
         required = ETF_ANALYST_REQUIRED_CAPABILITIES.get(analyst)
         if required is None or required.issubset(enabled) or all(
-            compatibility.get(item, item) in enabled for item in required
+            ETF_CAPABILITY_COMPATIBILITY_V2.get(item, item) in enabled
+            for item in required
         ):
             kept.append(analyst)
     return tuple(kept)
@@ -308,14 +329,7 @@ def report_field_is_active(field: str, capabilities: Iterable[str] | None) -> bo
     if required is None:
         return True
     enabled = frozenset(capabilities or ())
-    compatibility = {
-        "price_history": "subject_price_history",
-        "technical_indicators": "subject_price_indicators",
-        "liquidity_metrics": "etf_liquidity_metrics",
-        "fund_profile": "fund_profile",
-        "index_news_policy": "tracking_index_identity",
-        "peer_comparison": "peer_comparison",
-    }
     return required.issubset(enabled) or all(
-        compatibility.get(item, item) in enabled for item in required
+        ETF_CAPABILITY_COMPATIBILITY_V2.get(item, item) in enabled
+        for item in required
     )

@@ -6,6 +6,10 @@ from tradingagents.dataflows.security_master import FundMasterRecord, _classify
 
 def test_index_name_matching_is_exact_not_contains():
     assert resolve_index_reference(name="沪深300").status == "verified"
+    robot_index = resolve_index_reference(name="国证机器人产业指数")
+    assert robot_index.status == "verified"
+    assert robot_index.code == "980022"
+    assert robot_index.provider == "CNI"
     assert resolve_index_reference(name="中证全指半导体产品与设备指数").status == "missing"
 
 
@@ -32,7 +36,11 @@ def test_web_stock_resolution_freezes_v2_profile(monkeypatch):
         classification="not_a_fund",
         classification_reason="test",
     )
-    monkeypatch.setattr(security_master, "resolve_fund_master", lambda code: record)
+    monkeypatch.setattr(
+        security_master,
+        "resolve_fund_master",
+        lambda code, **_kwargs: record,
+    )
 
     mode, profile, error = _resolve_instrument_profile("600000")
 
@@ -40,6 +48,26 @@ def test_web_stock_resolution_freezes_v2_profile(monkeypatch):
     assert mode == "stock"
     assert profile is not None
     assert profile["analysis_product"] == "a_share_stock"
+    assert profile["security_type"] == "stock"
+
+
+def test_web_explicit_stock_resolution_skips_security_master(monkeypatch):
+    from web.components.sidebar import _resolve_stock_profile
+
+    def fail_if_called(_code):
+        raise AssertionError("security master should not be queried for stocks")
+
+    monkeypatch.setattr(
+        "tradingagents.dataflows.security_master.resolve_fund_master",
+        fail_if_called,
+    )
+
+    mode, profile, error = _resolve_stock_profile("300750")
+
+    assert error is None
+    assert mode == "stock"
+    assert profile is not None
+    assert profile["exchange"] == "SZSE"
     assert profile["security_type"] == "stock"
 
 
@@ -98,3 +126,32 @@ def test_passive_capabilities_require_a_resolved_reference():
     assert "subject_price_history" in capabilities.enabled
     assert "tracking_index_price_history" not in capabilities.enabled
     assert "series_alignment" not in capabilities.enabled
+
+
+def test_v2_probe_failures_remove_translated_etf_capabilities():
+    profile = profile_from_fund_master(
+        FundMasterRecord(
+            symbol="510300",
+            exchange="SSE",
+            fund_name="测试 ETF",
+            fund_type="指数型-股票",
+            tracking_index_name="沪深300指数",
+            fund_manager=None,
+            listed_or_established_date=None,
+            management_fee=None,
+            custodian_fee=None,
+            classification="domestic_equity_etf",
+            classification_reason="test",
+            tracking_index_code="000300",
+            tracking_index_provider="CSI",
+            tracking_index_code_source="catalog",
+            etf_management_style="passive",
+        )
+    ).to_dict()
+    capabilities = resolve_analysis_capabilities_v2(
+        profile,
+        "passive_equity_etf",
+        {"liquidity_metrics": "quote unavailable"},
+    )
+    assert "etf_liquidity_metrics" not in capabilities.enabled
+    assert capabilities.unavailable["etf_liquidity_metrics"] == "quote unavailable"

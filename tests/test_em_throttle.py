@@ -100,3 +100,23 @@ def test_em_session_is_thread_local():
     assert len({id(s) for s in sessions}) == 4
     # Same thread reuses the same session.
     assert a_stock._em_session() is a_stock._em_session()
+
+
+@pytest.mark.unit
+def test_em_get_retries_transient_connection_error(monkeypatch):
+    monkeypatch.setattr(a_stock, "_EM_MIN_INTERVAL", 0.0)
+    monkeypatch.setattr(a_stock, "_EM_NETWORK_ATTEMPTS", 2)
+    monkeypatch.setattr(a_stock, "_em_next_free", 0.0)
+    calls = 0
+
+    class _FlakySession:
+        def get(self, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            if calls == 1:
+                raise a_stock._requests.ConnectionError("transient disconnect")
+            return object()
+
+    monkeypatch.setattr(a_stock, "_em_session", lambda: _FlakySession())
+    assert a_stock._em_get("https://push2.eastmoney.com/x") is not None
+    assert calls == 2
