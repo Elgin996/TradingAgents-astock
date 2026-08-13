@@ -44,6 +44,7 @@ def test_history_loads_etf_mode_badge_fields(tmp_path, monkeypatch):
             {
                 "analysis_mode": "etf",
                 "instrument_profile": {
+                    "fund_name": "华泰柏瑞沪深300ETF",
                     "tracking_index_name": "沪深300指数",
                 },
                 "final_trade_decision": "HOLD",
@@ -60,8 +61,18 @@ def test_history_loads_etf_mode_badge_fields(tmp_path, monkeypatch):
     from web.components.sidebar import _history_mode_badge, _history_mode_label
 
     assert _history_mode_badge(entries[0]) == "[ETF]"
-    assert _history_mode_label(entries[0]) == "[ETF] · 沪深300指数"
+    assert _history_mode_label(entries[0]) == "[ETF] · 华泰柏瑞沪深300ETF"
     assert _history_mode_badge({"analysis_mode": "stock"}) == "[个股]"
+
+
+def test_history_mode_label_does_not_fall_back_to_index_name():
+    from web.components.sidebar import _history_mode_label
+
+    entry = {
+        "analysis_mode": "etf",
+        "instrument_profile": {"tracking_index_name": "沪深300指数"},
+    }
+    assert _history_mode_label(entry) == "[ETF]"
 
 
 def test_history_loads_legacy_nested_shape(tmp_path, monkeypatch):

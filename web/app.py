@@ -206,6 +206,13 @@ def _build_config() -> dict:
             config["agent_sdk_model"] = sub_model
     if scope == "all":
         config["quick_think_provider_override"] = "claude_agent_sdk"
+    from web.model_history import record_model_usage
+
+    record_model_usage(
+        config["llm_provider"],
+        config["quick_think_llm"],
+        config["deep_think_llm"],
+    )
     return config
 
 
@@ -329,7 +336,8 @@ elif tracker and tracker.is_complete:
 elif tracker and tracker.error:
     st.error(f"分析失败: {tracker.error}")
     st.caption("已完成阶段会保存在本地断点中；修复模型额度或配置后，可以继续未完成的部分。")
-    if st.button("继续未完成任务", type="primary"):
+    retry_col, delete_col = st.columns([2, 1])
+    if retry_col.button("继续未完成任务", type="primary", use_container_width=True):
         st.session_state["start_analysis"] = {
             "ticker": tracker.ticker,
             "trade_date": tracker.trade_date,
@@ -337,6 +345,29 @@ elif tracker and tracker.error:
             "analysis_product": tracker.analysis_product,
             "instrument_profile": tracker.instrument_profile,
         }
+        st.session_state["viewing_history"] = None
+        st.rerun()
+    if delete_col.button("删除未完成任务", use_container_width=True):
+        from tradingagents.graph.checkpointer import clear_checkpoint
+
+        clear_incomplete_task(
+            tracker.ticker,
+            tracker.trade_date,
+            tracker.analysis_mode,
+            tracker.analysis_product,
+        )
+        clear_checkpoint(
+            DEFAULT_CONFIG["data_cache_dir"],
+            tracker.ticker,
+            tracker.trade_date,
+            tracker.analysis_mode,
+            (
+                f"{tracker.analysis_product}-v2"
+                if tracker.analysis_product
+                else None
+            ),
+        )
+        st.session_state["tracker"] = None
         st.session_state["viewing_history"] = None
         st.rerun()
 

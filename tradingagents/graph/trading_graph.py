@@ -866,6 +866,23 @@ class TradingAgentsGraph:
         # Log state to disk.
         self._log_state(trade_date, final_state)
 
+        # Keep a small local security master for later runs and history labels.
+        # A cache write failure must never turn a successfully generated report
+        # into a failed analysis.
+        try:
+            from tradingagents.dataflows.instrument_store import save_completed_instrument
+
+            save_completed_instrument(
+                self.config["data_cache_dir"],
+                company_name,
+                self.analysis_mode if isinstance(self.analysis_mode, str) else "stock",
+                final_state.get("instrument_profile") or self.instrument_profile,
+                final_state,
+                str(trade_date),
+            )
+        except Exception as exc:  # noqa: BLE001 - best-effort auxiliary cache
+            logger.warning("保存证券基本信息到本地数据库失败：%s", exc)
+
         # Store decision for deferred reflection on the next same-ticker run.
         profile = self.instrument_profile if isinstance(self.instrument_profile, dict) else {}
         tracking_index_code = profile.get("tracking_index_code")

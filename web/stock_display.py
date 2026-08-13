@@ -70,12 +70,21 @@ def _resolve_display_code(ticker: str) -> str:
     return code
 
 
-@lru_cache(maxsize=1024)
 def resolve_stock_name(ticker: str) -> str | None:
     """Return the A-share name for a ticker code when local market data can resolve it."""
     code = _resolve_display_code(ticker)
-    if not re.match(r"^[036]\d{5}$", code):
+    if not re.match(r"^\d{6}$", code):
         return None
+
+    try:
+        from tradingagents.dataflows.instrument_store import get_instrument
+        from tradingagents.default_config import DEFAULT_CONFIG
+
+        saved = get_instrument(DEFAULT_CONFIG["data_cache_dir"], code)
+        if saved and saved.get("name"):
+            return _clean_stock_name(saved["name"])
+    except Exception:
+        pass
 
     try:
         from tradingagents.dataflows.a_stock import _build_name_code_map
@@ -139,6 +148,12 @@ def _extract_stock_name_from_text(code: str, text: str) -> str | None:
 
 
 def _extract_stock_name_from_state(code: str, final_state: dict) -> str | None:
+    profile = final_state.get("instrument_profile") or {}
+    if isinstance(profile, dict):
+        for value in (profile.get("name"), profile.get("fund_name")):
+            name = _clean_extracted_name(str(value or ""))
+            if _is_plausible_stock_name(name, code):
+                return name
     for key in ("stock_name", "company_name", "stock_input", "raw_ticker", "input_ticker"):
         name = _clean_extracted_name(str(final_state.get(key, "")))
         if _is_plausible_stock_name(name, code):

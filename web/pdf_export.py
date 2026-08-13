@@ -330,6 +330,7 @@ def _signal_color(signal: str) -> tuple[int, int, int]:
 
 
 _REPORT_SECTIONS = [
+    ("data_quality_summary", "数据质量与不可得数据"),
     ("market_report", "技术分析报告"),
     ("sentiment_report", "市场情绪报告"),
     ("news_report", "新闻舆情报告"),
@@ -574,12 +575,12 @@ def _collect_sections(
         report_sections = [
             (key, title)
             for key, title in [
+                ("data_quality_summary", "数据质量与不可得数据"),
                 ("market_report", "ETF 技术分析"),
                 ("etf_liquidity_report", "流动性与交易"),
                 ("etf_profile_report", "ETF 结构、份额与规模"),
                 ("etf_index_news_report", "指数新闻与政策"),
                 ("etf_compare_report", "同类比较与预警"),
-                ("data_quality_summary", "数据质量与不可得数据"),
             ]
             if key == "data_quality_summary"
             or report_field_is_active(key, capabilities)

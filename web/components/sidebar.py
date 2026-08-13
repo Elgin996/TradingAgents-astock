@@ -17,6 +17,7 @@ from web.history import (
     get_incomplete_history,
     record_incomplete_task,
 )
+from web.model_history import get_used_models
 
 # Provider display names in recommended order
 _PROVIDERS: list[tuple[str, str]] = [
@@ -70,17 +71,12 @@ def _history_mode_badge(entry: dict[str, Any]) -> str:
 
 
 def _history_mode_detail(entry: dict[str, Any]) -> str:
-    """Optional trailing detail after the badge (ETF tracking index name)."""
-    if (entry.get("analysis_mode") or "stock") != "etf":
-        return ""
+    """Show the analyzed stock/ETF name, never the ETF's index name."""
+    name = entry.get("name") or ""
     profile = entry.get("instrument_profile") or {}
-    if not isinstance(profile, dict):
-        return ""
-    index_name = profile.get("tracking_index_name") or ""
-    if not index_name and isinstance(profile.get("tracking_index_code"), dict):
-        # Frozen InstrumentProfile shape stores the nested DataPoint only.
-        index_name = ""
-    return f" · {index_name}" if index_name else ""
+    if not name and isinstance(profile, dict):
+        name = profile.get("name") or profile.get("fund_name") or ""
+    return f" · {name}" if name else ""
 
 
 def _tracking_index_display(profile: dict[str, Any]) -> tuple[str | None, str | None, str]:
@@ -113,8 +109,13 @@ def _resolve_user_input(raw: str) -> tuple[str, str | None]:
     Returns (code, None) on success or ("", error_msg) on failure.
     """
     from tradingagents.dataflows.a_stock import resolve_ticker
+    from tradingagents.dataflows.instrument_store import find_instrument_by_name
 
     try:
+        if any("一" <= ch <= "鿿" for ch in raw):
+            saved = find_instrument_by_name(DEFAULT_CONFIG["data_cache_dir"], raw)
+            if saved:
+                return str(saved["symbol"]), None
         code = resolve_ticker(raw)
         return code, None
     except ValueError as e:
@@ -123,6 +124,12 @@ def _resolve_user_input(raw: str) -> tuple[str, str | None]:
 
 def _resolve_instrument_profile(code: str) -> tuple[str, dict[str, Any] | None, str | None]:
     """Return the mode and a recognized ETF profile when one is available."""
+    from tradingagents.dataflows.instrument_store import get_instrument
+
+    saved = get_instrument(DEFAULT_CONFIG["data_cache_dir"], code)
+    if saved and saved.get("security_type") == "etf" and saved.get("profile"):
+        return "etf", saved["profile"], None
+
     from tradingagents.dataflows.a_stock import resolve_a_share_exchange
     from tradingagents.dataflows.security_master import resolve_fund_master
 
@@ -167,9 +174,13 @@ def _resolve_stock_profile(code: str) -> tuple[str, dict[str, Any] | None, str |
     for routing the stock data adapters.
     """
     from tradingagents.dataflows.a_stock import resolve_a_share_exchange
+    from tradingagents.dataflows.instrument_store import get_instrument
     from tradingagents.dataflows.instrument import profile_for_stock
 
     try:
+        saved = get_instrument(DEFAULT_CONFIG["data_cache_dir"], code)
+        if saved and saved.get("security_type") == "stock" and saved.get("profile"):
+            return "stock", saved["profile"], None
         exchange = resolve_a_share_exchange(code)
         profile = profile_for_stock(code, exchange=exchange).to_dict()
         return "stock", profile, None
@@ -375,49 +386,46 @@ def _render_llm_config() -> None:
     provider_key = _PROVIDER_KEYS[provider_idx]
     st.session_state["llm_provider"] = provider_key
 
-    if provider_key in MODEL_OPTIONS:
-        quick_options = MODEL_OPTIONS[provider_key]["quick"]
-        deep_options = MODEL_OPTIONS[provider_key]["deep"]
+    def render_model_select(role: str, label: str, env_name: str, help_text: str) -> str:
+        configured = os.getenv(env_name, DEFAULT_CONFIG[f"{role}_think_llm"])
+        catalog = MODEL_OPTIONS.get(provider_key, {}).get(role, [])
+        labels = {value: title for title, value in catalog if value != "custom"}
+        catalog_values = [value for _, value in catalog if value != "custom"]
+        preferred = (
+            configured
+            if provider_key == configured_provider or not catalog_values
+            else catalog_values[0]
+        )
+        choices: list[str] = []
+        for value in (
+            preferred,
+            *catalog_values,
+            *get_used_models(provider_key, role),
+        ):
+            value = str(value).strip()
+            if value and value not in choices:
+                choices.append(value)
+        return st.selectbox(
+            label,
+            choices,
+            format_func=lambda value: labels.get(value, f"曾用/自定义 · {value}"),
+            key=f"{role}_model_id_select_{provider_key}",
+            help=help_text + "；可输入新 ID，成功用于分析后会保留在下拉菜单中。",
+            accept_new_options=True,
+        )
 
-        quick_labels = [label for label, _ in quick_options]
-        quick_values = [value for _, value in quick_options]
-        deep_labels = [label for label, _ in deep_options]
-        deep_values = [value for _, value in deep_options]
-
-        quick_idx = st.selectbox(
-            "快速思考模型",
-            range(len(quick_options)),
-            format_func=lambda i: quick_labels[i],
-            key="quick_model_idx",
-            help="用于常规分析任务，速度优先",
-        )
-        st.session_state["quick_think_llm"] = quick_values[quick_idx]
-
-        deep_idx = st.selectbox(
-            "深度思考模型",
-            range(len(deep_options)),
-            format_func=lambda i: deep_labels[i],
-            key="deep_model_idx",
-            help="用于辩论/决策等需要深度推理的任务",
-        )
-        st.session_state["deep_think_llm"] = deep_values[deep_idx]
-    else:
-        custom_quick = st.text_input(
-            "快速思考模型 ID",
-            value=os.getenv(
-                "TRADINGAGENTS_QUICK_THINK_LLM", DEFAULT_CONFIG["quick_think_llm"]
-            ),
-            key="custom_quick_model",
-        )
-        custom_deep = st.text_input(
-            "深度思考模型 ID",
-            value=os.getenv(
-                "TRADINGAGENTS_DEEP_THINK_LLM", DEFAULT_CONFIG["deep_think_llm"]
-            ),
-            key="custom_deep_model",
-        )
-        st.session_state["quick_think_llm"] = custom_quick
-        st.session_state["deep_think_llm"] = custom_deep
+    st.session_state["quick_think_llm"] = render_model_select(
+        "quick",
+        "快速思考模型 ID",
+        "TRADINGAGENTS_QUICK_THINK_LLM",
+        "用于常规分析任务，速度优先",
+    )
+    st.session_state["deep_think_llm"] = render_model_select(
+        "deep",
+        "深度思考模型 ID",
+        "TRADINGAGENTS_DEEP_THINK_LLM",
+        "用于辩论/决策等需要深度推理的任务",
+    )
 
     if provider_key == "openrouter":
         effort_values = ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"]
@@ -692,9 +700,15 @@ def render_sidebar() -> None:
             step_label = f" · step {step}" if step is not None else ""
             mode_label = _history_mode_label(entry)
             label = f"{t}  ·  {d}  ·  {mode_label}  ·  {status_label}{step_label}"
-            if st.button(
-                label,
-                key=f"resume_{t}_{d}_{entry.get('analysis_mode', 'stock')}",
+            st.caption(label)
+            resume_col, delete_col = st.columns([3, 2])
+            task_key = (
+                f"{t}_{d}_{entry.get('analysis_mode', 'stock')}_"
+                f"{entry.get('analysis_product') or 'legacy'}"
+            )
+            if resume_col.button(
+                "▶️ 继续",
+                key=f"resume_{task_key}",
                 use_container_width=True,
                 disabled=is_busy,
             ):
@@ -706,6 +720,28 @@ def render_sidebar() -> None:
                     "instrument_profile": entry.get("instrument_profile"),
                 }
                 st.session_state["viewing_history"] = None
+            if delete_col.button(
+                "🗑️ 删除",
+                key=f"delete_{task_key}",
+                use_container_width=True,
+                disabled=is_busy,
+            ):
+                _clear_analysis_artifacts(
+                    t,
+                    d,
+                    entry.get("analysis_mode", "stock"),
+                    entry.get("analysis_product"),
+                )
+                current = st.session_state.get("tracker")
+                if (
+                    current is not None
+                    and current.ticker == t
+                    and current.trade_date == d
+                    and not current.is_running
+                ):
+                    st.session_state["tracker"] = None
+                st.session_state["viewing_history"] = None
+                st.rerun()
 
     st.markdown("---")
     st.markdown("#### 历史记录")

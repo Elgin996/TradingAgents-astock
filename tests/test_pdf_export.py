@@ -9,11 +9,26 @@ from web.pdf_export import (
     PDFExportError,
     _ReportPDF,
     _compact_inline_text,
+    _collect_sections,
     _discover_cjk_fonts,
     _find_cjk_fonts,
     _format_table_cells,
     generate_pdf,
 )
+
+
+def test_data_quality_is_first_exported_analyst_section():
+    sections = _collect_sections(
+        {
+            "data_quality_summary": "质量结论",
+            "market_report": "技术结论",
+        }
+    )
+
+    assert [title for title, _ in sections[:2]] == [
+        "数据质量与不可得数据",
+        "技术分析报告",
+    ]
 
 
 def test_generate_pdf_with_chinese_markdown_when_cjk_font_available():

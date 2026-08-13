@@ -78,6 +78,17 @@ def get_history() -> list[dict[str, str]]:
             ):
                 if state.get(key):
                     entry[key] = state.get(key)
+            profile = entry.get("instrument_profile") or {}
+            if isinstance(profile, dict):
+                name = profile.get("name") or profile.get("fund_name")
+                if name:
+                    entry["name"] = str(name)
+            if not entry.get("name"):
+                from tradingagents.dataflows.instrument_store import get_instrument
+
+                saved = get_instrument(DEFAULT_CONFIG["data_cache_dir"], ticker)
+                if saved and saved.get("name"):
+                    entry["name"] = str(saved["name"])
         except (OSError, json.JSONDecodeError, TypeError):
             entry["analysis_mode"] = "stock"
         entries.append(entry)

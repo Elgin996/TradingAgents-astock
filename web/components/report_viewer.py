@@ -230,6 +230,13 @@ def render_report(
 
     st.markdown("### 📊 分析师报告")
 
+    # Quality is the lens through which every analyst section should be read,
+    # so keep it first rather than burying it after the decision chain.
+    dqs = final_state.get("data_quality_summary", "")
+    if dqs:
+        with st.expander("✅ 数据质量", expanded=True):
+            st.markdown(_display_report_text(dqs, ticker, final_state))
+
     sections = (
         _ETF_ANALYST_SECTIONS
         if final_state.get("analysis_mode") == "etf"
@@ -279,8 +286,3 @@ def render_report(
             st.markdown(_display_report_text(risk.get("neutral_history", "") or "无数据", ticker, final_state))
         with tab_rj:
             st.markdown(_display_report_text(risk.get("judge_decision", "") or "无数据", ticker, final_state))
-
-    dqs = final_state.get("data_quality_summary", "")
-    if dqs:
-        with st.expander("✅ 数据质量", expanded=False):
-            st.markdown(_display_report_text(dqs, ticker, final_state))
