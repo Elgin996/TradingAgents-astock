@@ -750,6 +750,8 @@ def render_sidebar() -> None:
     if not history:
         st.caption("暂无历史记录")
         return
+    if is_busy:
+        st.caption("当前分析仍在后台运行；查看历史记录不会中断当前分析。")
 
     for entry in history[:20]:
         t, d = entry["ticker"], entry["date"]
@@ -763,6 +765,11 @@ def render_sidebar() -> None:
         ):
             st.session_state["viewing_history"] = entry["path"]
             st.session_state["start_analysis"] = None
+            # Explicitly switch the main-area state now. This is important
+            # while a progress fragment is polling in the same session: the
+            # ordinary widget rerun can otherwise leave the old progress view
+            # visible until the next poll.
+            st.rerun()
 
     st.markdown("---")
     st.caption("⚠️ 仅供学习研究，不构成投资建议")

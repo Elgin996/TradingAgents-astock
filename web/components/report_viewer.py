@@ -56,6 +56,186 @@ def _display_report_text(text: Any, ticker: str, final_state: dict[str, Any]) ->
     return normalize_stock_mentions(cleaned, ticker, final_state)
 
 
+_TECHNICAL_METADATA_FIELDS = {
+    "symbol",
+    "adjustment",
+    "source",
+    "source_symbol",
+    "retrieved_at",
+    "flags",
+    "trade_date",
+}
+_TECHNICAL_INDICATOR_LABELS = {
+    "close_sma_20": "收盘价 SMA20",
+    "close_sma_50": "收盘价 SMA50",
+    "close_sma_200": "收盘价 SMA200",
+    "close_10_ema": "收盘价 EMA10",
+    "macd": "MACD",
+    "macds": "MACD 信号线",
+    "macdh": "MACD 柱",
+    "rsi": "RSI",
+    "boll": "布林中轨",
+    "boll_ub": "布林上轨",
+    "boll_lb": "布林下轨",
+    "atr": "ATR",
+    "vwma": "成交量加权均线",
+    "mfi": "MFI",
+    "volume_5_sma": "成交量 SMA5",
+    "volume_20_sma": "成交量 SMA20",
+    "rolling_high_20": "20 日最高价",
+    "rolling_low_20": "20 日最低价",
+    "rolling_high_60": "60 日最高价",
+    "rolling_low_60": "60 日最低价",
+}
+_TECHNICAL_SIGNAL_DIRECTION_LABELS = {
+    "bullish": "看多",
+    "bearish": "看空",
+    "neutral": "中性",
+    "unavailable": "不可得",
+}
+
+
+def _format_technical_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        formatted = f"{value:,.4f}".rstrip("0").rstrip(".")
+        return formatted
+    return str(value)
+
+
+def _technical_indicator_rows(
+    items: Any,
+    *,
+    scope: str,
+) -> list[dict[str, str]]:
+    """Normalize v1 and product-v2 indicator payloads for the report table."""
+    rows: list[dict[str, str]] = []
+    if isinstance(items, dict):
+        normalized = [
+            {"name": name, "value": value}
+            for name, value in items.items()
+        ]
+    elif isinstance(items, list):
+        normalized = [item for item in items if isinstance(item, dict)]
+    else:
+        normalized = []
+
+    for item in normalized:
+        name = str(item.get("name", "")).strip()
+        value = item.get("value")
+        if not name or name in _TECHNICAL_METADATA_FIELDS or value is None:
+            continue
+        rows.append(
+            {
+                "对象": scope,
+                "指标": _TECHNICAL_INDICATOR_LABELS.get(name, name),
+                "字段": name,
+                "数值": _format_technical_value(value),
+                "日期": str(item.get("trade_date", "")),
+            }
+        )
+    return rows
+
+
+def _render_structured_technical_evidence(final_state: dict[str, Any]) -> None:
+    """Show the frozen indicator/signal evidence behind the technical report."""
+    bundle = (
+        final_state.get("product_technical_evidence_bundle")
+        or final_state.get("technical_evidence_bundle")
+        or {}
+    )
+    if not isinstance(bundle, dict):
+        return
+
+    subject_indicators = bundle.get("subject_indicators")
+    if subject_indicators is None:
+        subject_indicators = bundle.get("indicators")
+    indicator_rows = _technical_indicator_rows(subject_indicators, scope="主体")
+    indicator_rows.extend(
+        _technical_indicator_rows(
+            bundle.get("reference_indicators"),
+            scope="参考",
+        )
+    )
+
+    subject_signals = bundle.get("subject_signals")
+    if subject_signals is None:
+        subject_signals = bundle.get("signals")
+    signal_rows: list[dict[str, str]] = []
+    if isinstance(subject_signals, list):
+        for signal in subject_signals:
+            if not isinstance(signal, dict):
+                continue
+            direction = str(signal.get("direction", "unavailable"))
+            signal_rows.append(
+                {
+                    "对象": "主体",
+                    "信号": str(signal.get("signal_id", "")),
+                    "类别": str(signal.get("category", "")),
+                    "方向": _TECHNICAL_SIGNAL_DIRECTION_LABELS.get(direction, direction),
+                    "强度": _format_technical_value(signal.get("strength", "")),
+                    "置信度": _format_technical_value(signal.get("confidence", "")),
+                }
+            )
+    reference_signals = bundle.get("reference_signals")
+    if isinstance(reference_signals, list):
+        for signal in reference_signals:
+            if not isinstance(signal, dict):
+                continue
+            direction = str(signal.get("direction", "unavailable"))
+            signal_rows.append(
+                {
+                    "对象": "参考",
+                    "信号": str(signal.get("signal_id", "")),
+                    "类别": str(signal.get("category", "")),
+                    "方向": _TECHNICAL_SIGNAL_DIRECTION_LABELS.get(direction, direction),
+                    "强度": _format_technical_value(signal.get("strength", "")),
+                    "置信度": _format_technical_value(signal.get("confidence", "")),
+                }
+            )
+
+    assessment = bundle.get("product_assessment") or final_state.get("technical_assessment") or {}
+    if isinstance(assessment, dict) and assessment:
+        st.caption(
+            "确定性技术判断："
+            f"{assessment.get('stance', assessment.get('subject_stance', 'unavailable'))} · "
+            f"置信度 {_format_technical_value(assessment.get('confidence', ''))} · "
+            f"数据质量 {assessment.get('data_quality_grade', '—')}"
+        )
+
+    market_bundle = final_state.get("analysis_market_data_bundle") or {}
+    subject = market_bundle.get("subject") if isinstance(market_bundle, dict) else None
+    bars = subject.get("bars") if isinstance(subject, dict) else None
+    latest_bar = bars[-1] if isinstance(bars, list) and bars else None
+    if latest_bar is None:
+        latest_bar = bundle.get("latest_bar")
+    if isinstance(latest_bar, dict) and latest_bar:
+        st.markdown("**最新行情**")
+        st.dataframe(
+            [
+                {
+                    "日期": latest_bar.get("trade_date", ""),
+                    "开盘": _format_technical_value(latest_bar.get("open", "")),
+                    "最高": _format_technical_value(latest_bar.get("high", "")),
+                    "最低": _format_technical_value(latest_bar.get("low", "")),
+                    "收盘": _format_technical_value(latest_bar.get("close", "")),
+                    "成交量": _format_technical_value(latest_bar.get("volume", "")),
+                    "来源": latest_bar.get("source", ""),
+                }
+            ],
+            hide_index=True,
+            use_container_width=True,
+        )
+
+    if indicator_rows:
+        st.markdown("**已验证技术指标**")
+        st.dataframe(indicator_rows, hide_index=True, use_container_width=True)
+    if signal_rows:
+        st.markdown("**确定性技术信号**")
+        st.dataframe(signal_rows, hide_index=True, use_container_width=True)
+
+
 def _state_digest(final_state: dict[str, Any]) -> str:
     payload = json.dumps(final_state, sort_keys=True, default=str, ensure_ascii=False)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -188,36 +368,60 @@ def render_report(
             )
             break
 
-    # Markdown export always works (no font dependency); PDF is generated
-    # lazily and guarded so a PDF/font failure never crashes the results page.
+    # Do not build exports while opening a history record.  Both exports walk
+    # the complete state, and PDF generation may also inspect system fonts;
+    # doing that synchronously here makes the report appear to hang.  Prepare
+    # each file only when the user asks for it.
+    digest = _state_digest(final_state)
+    export_prefix = f"report_export_{digest}"
     col_md, col_pdf, col_spacer = st.columns([1, 1, 2])
     with col_md:
-        md_text = generate_markdown(final_state, ticker, trade_date, signal)
-        st.download_button(
-            "📥 下载 Markdown",
-            data=md_text.encode("utf-8"),
-            file_name=f"TradingAgents-Astock_{_safe_filename_label(ticker_label)}_{trade_date}.md",
-            mime="text/markdown",
-            use_container_width=True,
-        )
-    with col_pdf:
-        try:
-            digest = _state_digest(final_state)
-            state_json = json.dumps(final_state, default=str, ensure_ascii=False)
-            pdf_bytes = _cached_pdf(digest, ticker, trade_date, signal, state_json)
+        md_key = f"{export_prefix}_markdown"
+        if st.button("📥 准备 Markdown", key=f"{export_prefix}_markdown_prepare", use_container_width=True):
+            st.session_state[md_key] = generate_markdown(
+                final_state, ticker, trade_date, signal
+            )
+        md_text = st.session_state.get(md_key)
+        if md_text:
             st.download_button(
-                "📄 下载 PDF",
+                "⬇️ 下载 Markdown",
+                data=md_text.encode("utf-8"),
+                file_name=f"TradingAgents-Astock_{_safe_filename_label(ticker_label)}_{trade_date}.md",
+                mime="text/markdown",
+                key=f"{export_prefix}_markdown_download",
+                use_container_width=True,
+            )
+    with col_pdf:
+        pdf_key = f"{export_prefix}_pdf"
+        pdf_error_key = f"{export_prefix}_pdf_error"
+        if st.button("📄 准备 PDF", key=f"{export_prefix}_pdf_prepare", use_container_width=True):
+            try:
+                state_json = json.dumps(final_state, default=str, ensure_ascii=False)
+                st.session_state[pdf_key] = _cached_pdf(
+                    digest, ticker, trade_date, signal, state_json
+                )
+                st.session_state.pop(pdf_error_key, None)
+            except Exception as exc:  # noqa: BLE001 — never let PDF crash the results page
+                st.session_state[pdf_error_key] = str(exc)
+        pdf_bytes = st.session_state.get(pdf_key)
+        if pdf_bytes:
+            st.download_button(
+                "⬇️ 下载 PDF",
                 data=pdf_bytes,
                 file_name=f"TradingAgents-Astock_{_safe_filename_label(ticker_label)}_{trade_date}.pdf",
                 mime="application/pdf",
+                key=f"{export_prefix}_pdf_download",
                 use_container_width=True,
             )
-        except Exception as exc:  # noqa: BLE001 — never let PDF crash the page
+        elif st.session_state.get(pdf_error_key):
             st.button(
                 "📄 PDF 不可用",
                 disabled=True,
                 use_container_width=True,
-                help=f"PDF 生成失败，请改用 Markdown 导出。原因：{exc}",
+                help=(
+                    "PDF 生成失败，请改用 Markdown 导出。原因："
+                    + st.session_state[pdf_error_key]
+                ),
             )
 
     st.markdown("---")
@@ -255,8 +459,10 @@ def render_report(
         content = final_state.get(key, "")
         if not content:
             continue
-        with st.expander(title, expanded=False):
+        with st.expander(title, expanded=(key == "market_report")):
             st.markdown(_display_report_text(content, ticker, final_state))
+            if key == "market_report":
+                _render_structured_technical_evidence(final_state)
 
     debate = final_state.get("investment_debate_state")
     if debate and isinstance(debate, dict):
