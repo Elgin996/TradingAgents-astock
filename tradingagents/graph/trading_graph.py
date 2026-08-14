@@ -144,7 +144,7 @@ class TradingAgentsGraph:
 
     def __init__(
         self,
-        selected_analysts=["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"],
+        selected_analysts=None,
         debug=False,
         config: Dict[str, Any] = None,
         callbacks: Optional[List] = None,
@@ -160,6 +160,15 @@ class TradingAgentsGraph:
         self.debug = debug
         self.config = config or DEFAULT_CONFIG
         self.callbacks = callbacks or []
+
+        _default_analysts = ["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"]
+        self._explicit_analysts = selected_analysts is not None and selected_analysts != _default_analysts
+        if selected_analysts is None:
+            if self.config.get("is_etf", False):
+                selected_analysts = ["market"]
+            else:
+                selected_analysts = _default_analysts
+        self.selected_analysts = selected_analysts
 
         # Update the interface's config
         set_config(self.config)
@@ -404,8 +413,12 @@ class TradingAgentsGraph:
             if thinking_level:
                 kwargs["thinking_level"] = thinking_level
 
-        elif provider == "openai":
-            reasoning_effort = self.config.get("openai_reasoning_effort")
+        elif provider in ("openai", "openrouter", "openai_compatible"):
+            reasoning_effort = (
+                self.config.get("openai_reasoning_effort")
+                or self.config.get("reasoning_effort")
+                or self.config.get("effort")
+            )
             if reasoning_effort:
                 kwargs["reasoning_effort"] = reasoning_effort
 
@@ -591,6 +604,16 @@ class TradingAgentsGraph:
         existing thread instead of replaying completed nodes.
         """
         self.ticker = company_name
+
+        from tradingagents.dataflows.a_stock import is_etf_ticker
+
+        is_etf = self.config.get("is_etf", False) or is_etf_ticker(company_name)
+        if is_etf and not self._explicit_analysts and self.selected_analysts != ["market"]:
+            logger.info("Auto-detected ETF ticker %s: defaulting analysts to ['market']", company_name)
+            self.selected_analysts = ["market"]
+            self.workflow = self.graph_setup.setup_graph(["market"])
+            if not self.config.get("checkpoint_enabled"):
+                self.graph = self.workflow.compile()
 
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
         self._resolve_pending_entries(company_name)

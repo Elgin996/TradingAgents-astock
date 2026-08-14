@@ -545,7 +545,13 @@ def get_user_selections():
             "Step 4: Analysts Team", "Select your LLM analyst agents for the analysis"
         )
     )
-    selected_analysts = select_analysts()
+    from tradingagents.dataflows.a_stock import is_etf_ticker
+    is_etf = is_etf_ticker(selected_ticker)
+    if is_etf:
+        console.print(
+            f"[cyan]ℹ️ 检测到 ETF 标的（{selected_ticker}），分析师团队默认预选 [Market Analyst]（技术分析师）。[/cyan]"
+        )
+    selected_analysts = select_analysts(is_etf=is_etf)
     console.print(
         f"[green]Selected analysts:[/green] {', '.join(analyst.value for analyst in selected_analysts)}"
     )
@@ -1326,7 +1332,20 @@ def performance(
     if json_out:
         console.print_json(_json.dumps(summary, ensure_ascii=False))
         return
-    console.print(Markdown(format_report(summary)))
+@app.command()
+def quick(
+    ticker: Optional[str] = typer.Argument(None, help="股票或 ETF 代码 (如 517520, 159242.etf, 600519)"),
+    date: Optional[str] = typer.Option(None, "--date", "-d", help="分析基准日期 (YYYY-MM-DD，默认最新交易日)"),
+    output: Optional[str] = typer.Option(None, "--output", "-o", help="输出 Markdown 文件路径"),
+):
+    """快速投研分析：默认仅运行 Market Analyst (技术量价分析)，直接输出 Markdown 研报。"""
+    from quick_analyze import run_quick_analysis
+    if not ticker:
+        ticker = questionary.text("请输入股票或 ETF 代码 (如 517520.etf 或 600519):").ask()
+        if not ticker:
+            console.print("[red]错误: 股票或 ETF 代码不能为空。[/red]")
+            return
+    run_quick_analysis(ticker.strip(), date, output)
 
 
 if __name__ == "__main__":

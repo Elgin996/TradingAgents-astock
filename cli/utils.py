@@ -86,13 +86,27 @@ def get_analysis_date() -> str:
     return date.strip()
 
 
-def select_analysts() -> List[AnalystType]:
-    """Select analysts using an interactive checkbox."""
-    choices = questionary.checkbox(
-        "Select Your [Analysts Team]:",
-        choices=[
-            questionary.Choice(display, value=value) for display, value in ANALYST_ORDER
-        ],
+def select_analysts(is_etf: bool = False) -> List[AnalystType]:
+    """Select analysts using an interactive checkbox.
+
+    If is_etf is True, defaults to selecting only Market Analyst.
+    """
+    choices = [
+        questionary.Choice(
+            display,
+            value=value,
+            checked=(value == AnalystType.MARKET if is_etf else True),
+        )
+        for display, value in ANALYST_ORDER
+    ]
+    prompt_text = (
+        "Select Your [Analysts Team] (ETF 标的默认仅勾选 Market Analyst):"
+        if is_etf
+        else "Select Your [Analysts Team]:"
+    )
+    choices_result = questionary.checkbox(
+        prompt_text,
+        choices=choices,
         instruction="\n- Press Space to select/unselect analysts\n- Press 'a' to select/unselect all\n- Press Enter when done",
         validate=lambda x: len(x) > 0 or "You must select at least one analyst.",
         style=questionary.Style(
@@ -105,11 +119,11 @@ def select_analysts() -> List[AnalystType]:
         ),
     ).ask()
 
-    if not choices:
+    if not choices_result:
         console.print("\n[red]No analysts selected. Exiting...[/red]")
         exit(1)
 
-    return choices
+    return choices_result
 
 
 def select_research_depth() -> int:

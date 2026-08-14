@@ -52,9 +52,9 @@ def _get_prefix(code: str) -> str:
     """
     if code.startswith("92"):
         return "bj"
-    if code.startswith(("6", "9")):
+    if code.startswith(("5", "6", "9")):
         return "sh"
-    elif code.startswith("8"):
+    elif code.startswith(("4", "8")):
         return "bj"
     return "sz"
 
@@ -88,17 +88,44 @@ def _reject_non_a_share(original: str, code: str) -> None:
     )
 
 
+def is_etf_ticker(symbol: str) -> bool:
+    """Check whether symbol represents an A-share ETF/LOF fund.
+
+    Recognizes:
+    - Explicit '.ETF' suffix: '159242.ETF', '517520.etf'
+    - Known A-share ETF/LOF 6-digit prefixes:
+      51xxxx, 56xxxx, 58xxxx (SH ETF), 15xxxx (SZ ETF), 16xxxx (SZ LOF/ETF),
+      50xxxx (SH Fund), 18xxxx (SZ Fund), 59xxxx
+    """
+    if not symbol or not isinstance(symbol, str):
+        return False
+    s = symbol.strip().upper()
+    if s.endswith(".ETF") or s.endswith("ETF"):
+        return True
+    for suffix in (".SH", ".SZ", ".BJ", ".SS", ".ETF"):
+        if s.endswith(suffix):
+            s = s[: -len(suffix)]
+            break
+    for prefix in ("SH", "SZ", "BJ"):
+        if s.startswith(prefix):
+            s = s[len(prefix) :]
+            break
+    if s.isdigit() and len(s) == 6:
+        return s.startswith(("51", "56", "58", "15", "16", "50", "18", "59"))
+    return False
+
+
 def _normalize_ticker(symbol: str) -> str:
     """Strip exchange prefix/suffix, return pure 6-digit code.
 
-    Handles: '688017', 'SH688017', '688017.SH', 'sh688017'
+    Handles: '688017', 'SH688017', '688017.SH', 'sh688017', '517520.ETF', '159242.etf'
 
     非 A 股代码（港股 `00700` / `0700.HK`、美股 `AAPL`）会直接报错，不再原样
     放行去查 A 股数据源（#43）。
     """
     s = symbol.strip().upper()
-    # Remove .SH / .SZ / .BJ suffix
-    for suffix in (".SH", ".SZ", ".BJ"):
+    # Remove .SH / .SZ / .BJ / .SS / .ETF suffix
+    for suffix in (".SH", ".SZ", ".BJ", ".SS", ".ETF"):
         if s.endswith(suffix):
             s = s[: -len(suffix)]
             break
@@ -631,7 +658,7 @@ def _sina_kline_fallback(code: str, start_date: str = None, end_date: str = None
 
     Returns DataFrame with columns: Date, Open, High, Low, Close, Volume.
     """
-    prefix = "sh" if code.startswith("6") else "sz"
+    prefix = "sh" if code.startswith(("5", "6", "9")) else "sz"
     url = (
         "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
         "CN_MarketData.getKLineData"
@@ -1042,7 +1069,7 @@ def get_fundamentals(
 
         # --- Eastmoney push2: basic stock info (direct HTTP) ---
         try:
-            market_code = 1 if code.startswith("6") else 0
+            market_code = 1 if code.startswith(("5", "6", "9")) else 0
             _info_url = "https://push2.eastmoney.com/api/qt/stock/get"
             _info_params = {
                 "fltt": "2",
@@ -1176,7 +1203,7 @@ def _get_financial_report_sina(
     }
     source_type = _report_type_map.get(report_type, "lrb")
 
-    prefix = "sh" if code.startswith("6") else "sz"
+    prefix = "sh" if code.startswith(("5", "6", "9")) else "sz"
     paper_code = f"{prefix}{code}"
     url = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
     params = {
@@ -2046,7 +2073,7 @@ def get_fund_flow(
     with 东财 push2 fund flow API.
     """
     code = _normalize_ticker(ticker)
-    secid = f"1.{code}" if code.startswith("6") else f"0.{code}"
+    secid = f"1.{code}" if code.startswith(("5", "6", "9")) else f"0.{code}"
     lines = [
         f"# Fund Flow for {code} (A-stock)",
         f"# Source: 东财 push2 (Eastmoney)",

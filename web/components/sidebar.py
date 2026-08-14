@@ -135,9 +135,15 @@ def _render_analysis_controls(raw_ticker: str, trade_date_value: date) -> None:
 def _render_llm_config() -> None:
     """Render LLM provider and model selection controls."""
 
+    default_provider_idx = (
+        _PROVIDER_KEYS.index(DEFAULT_CONFIG["llm_provider"])
+        if DEFAULT_CONFIG.get("llm_provider") in _PROVIDER_KEYS
+        else 0
+    )
     provider_idx = st.selectbox(
         "LLM 供应商",
         range(len(_PROVIDERS)),
+        index=default_provider_idx,
         format_func=lambda i: _PROVIDER_DISPLAY[i],
         key="llm_provider_idx",
         help="选择你配置了 API Key 的供应商",
@@ -172,8 +178,22 @@ def _render_llm_config() -> None:
         )
         st.session_state["deep_think_llm"] = deep_values[deep_idx]
     else:
-        custom_quick = st.text_input("快速思考模型 ID", key="custom_quick_model")
-        custom_deep = st.text_input("深度思考模型 ID", key="custom_deep_model")
+        default_quick = (
+            DEFAULT_CONFIG.get("quick_think_llm", "")
+            if provider_key == DEFAULT_CONFIG.get("llm_provider")
+            else ""
+        )
+        default_deep = (
+            DEFAULT_CONFIG.get("deep_think_llm", "")
+            if provider_key == DEFAULT_CONFIG.get("llm_provider")
+            else ""
+        )
+        custom_quick = st.text_input(
+            "快速思考模型 ID", value=default_quick, key="custom_quick_model"
+        )
+        custom_deep = st.text_input(
+            "深度思考模型 ID", value=default_deep, key="custom_deep_model"
+        )
         st.session_state["quick_think_llm"] = custom_quick
         st.session_state["deep_think_llm"] = custom_deep
 

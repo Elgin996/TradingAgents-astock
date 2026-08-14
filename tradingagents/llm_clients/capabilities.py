@@ -49,6 +49,13 @@ _DEEPSEEK_CHAT = ModelCapabilities(
     preferred_structured_method="function_calling",
 )
 
+_QWEN_THINKING = ModelCapabilities(
+    supports_tool_choice=False,
+    supports_json_mode=True,
+    supports_json_schema=False,
+    preferred_structured_method="function_calling",
+)
+
 _MINIMAX_THINKING = ModelCapabilities(
     supports_tool_choice=True,
     supports_json_mode=False,
@@ -70,6 +77,8 @@ _BY_ID: dict[str, ModelCapabilities] = {
     "deepseek-reasoner": _DEEPSEEK_THINKING,
     "deepseek-v4-flash": _DEEPSEEK_THINKING,
     "deepseek-v4-pro": _DEEPSEEK_THINKING,
+    "qwen3.7-flash": _QWEN_THINKING,
+    "qwen/qwen3.7-flash": _QWEN_THINKING,
     "MiniMax-M2": _MINIMAX_THINKING,
     "MiniMax-M2.1": _MINIMAX_THINKING,
     "MiniMax-M2.1-highspeed": _MINIMAX_THINKING,
@@ -80,14 +89,10 @@ _BY_ID: dict[str, ModelCapabilities] = {
 }
 
 _BY_PATTERN: list[tuple[re.Pattern[str], ModelCapabilities]] = [
-    # 只匹配已实测的 V4 家族。`^deepseek-v\d` 会连 deepseek-v3* 和未来所有版本一起
-    # 吃掉，把「不接受 tool_choice」这个**只在 V4/reasoner 上验证过**的结论强加给
-    # 未验证的型号——结构化输出会从强制 schema 工具调用降级为可选调用，反而更容易
-    # 退回自由文本。与下方 MiniMax 同一把尺子：新家族实测过再加。
+    # 只匹配已实测的 V4 家族。
     (re.compile(r"^deepseek-v4(?:$|[.-])"), _DEEPSEEK_THINKING),
     (re.compile(r"^deepseek-reasoner"), _DEEPSEEK_THINKING),
-    # ``reasoning_split`` is an M2.x capability; do not assume it for a
-    # future MiniMax family (for example M3) until that API is verified.
+    (re.compile(r"^(?:qwen/)?qwen(?:3\.7|\d+(?:\.\d+)?)(?:$|[.-])", re.IGNORECASE), _QWEN_THINKING),
     (re.compile(r"^MiniMax-M2(?:$|[.-])"), _MINIMAX_THINKING),
 ]
 

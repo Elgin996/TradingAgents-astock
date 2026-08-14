@@ -74,6 +74,7 @@ Upstream = "https://github.com/TauricResearch/TradingAgents"
 [project.scripts]
 tradingagents = "cli.main:app"
 tradingagents-web = "web.launch:main"
+tradingagents-quick = "quick_analyze:main"
 
 [tool.setuptools.packages.find]
 include = ["tradingagents*", "cli*", "web*"]
