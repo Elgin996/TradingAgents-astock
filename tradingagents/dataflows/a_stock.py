@@ -59,6 +59,15 @@ def _get_prefix(code: str) -> str:
     return "sz"
 
 
+def _eastmoney_secid(code: str) -> str:
+    """6-digit A-share code -> Eastmoney ``secid`` (``1.SH`` / ``0.SZ-or-BJ``).
+
+    Must go through ``_get_prefix`` so 920xxx stays off Shanghai (issue #85).
+    """
+    market_code = 1 if _get_prefix(code) == "sh" else 0
+    return f"{market_code}.{code}"
+
+
 def _reject_non_a_share(original: str, code: str) -> None:
     """港股/美股代码走到 A 股数据层时当场报错，而不是拿去查 A 股（#43）。
 
@@ -658,13 +667,12 @@ def _sina_kline_fallback(code: str, start_date: str = None, end_date: str = None
 
     Returns DataFrame with columns: Date, Open, High, Low, Close, Volume.
     """
-    prefix = "sh" if code.startswith(("5", "6", "9")) else "sz"
     url = (
         "http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/"
         "CN_MarketData.getKLineData"
     )
     params = {
-        "symbol": f"{prefix}{code}",
+        "symbol": _sina_stock_code(code),
         "scale": "240",  # daily
         "ma": "no",
         "datalen": "800",
@@ -1069,13 +1077,12 @@ def get_fundamentals(
 
         # --- Eastmoney push2: basic stock info (direct HTTP) ---
         try:
-            market_code = 1 if code.startswith(("5", "6", "9")) else 0
             _info_url = "https://push2.eastmoney.com/api/qt/stock/get"
             _info_params = {
                 "fltt": "2",
                 "invt": "2",
                 "fields": "f57,f58,f84,f85,f127,f116,f117,f189,f43",
-                "secid": f"{market_code}.{code}",
+                "secid": _eastmoney_secid(code),
             }
             r = _em_get(_info_url, params=_info_params, timeout=10)
             d = r.json().get("data", {})
@@ -1203,8 +1210,7 @@ def _get_financial_report_sina(
     }
     source_type = _report_type_map.get(report_type, "lrb")
 
-    prefix = "sh" if code.startswith(("5", "6", "9")) else "sz"
-    paper_code = f"{prefix}{code}"
+    paper_code = _sina_stock_code(code)
     url = "https://quotes.sina.cn/cn/api/openapi.php/CompanyFinanceService.getFinanceReport2022"
     params = {
         "paperCode": paper_code,
@@ -2073,7 +2079,7 @@ def get_fund_flow(
     with 东财 push2 fund flow API.
     """
     code = _normalize_ticker(ticker)
-    secid = f"1.{code}" if code.startswith(("5", "6", "9")) else f"0.{code}"
+    secid = _eastmoney_secid(code)
     lines = [
         f"# Fund Flow for {code} (A-stock)",
         f"# Source: 东财 push2 (Eastmoney)",

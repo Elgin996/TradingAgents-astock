@@ -267,6 +267,18 @@ def test_provider_specific_kwargs_not_leaked_to_other_vendors(monkeypatch):
     assert by_provider["openai"]["reasoning_effort"] == "high", "同一家应保留专属参数"
 
 
+def test_default_config_does_not_inject_reasoning_effort():
+    """默认 openai_reasoning_effort=None，不能把 max 塞给 OpenRouter / Qwen。"""
+    from tradingagents.default_config import DEFAULT_CONFIG
+    from tradingagents.graph.trading_graph import TradingAgentsGraph
+
+    graph = TradingAgentsGraph.__new__(TradingAgentsGraph)
+    graph.config = dict(DEFAULT_CONFIG)
+    kwargs = graph._get_provider_kwargs()
+    assert "reasoning_effort" not in kwargs
+    assert DEFAULT_CONFIG["openai_reasoning_effort"] is None
+
+
 def test_unselected_analyst_roles_are_not_instantiated(monkeypatch):
     """没选中的分析师不会进图，就不该为它建模型。
 

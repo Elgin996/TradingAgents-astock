@@ -76,6 +76,9 @@ tradingagents = "cli.main:app"
 tradingagents-web = "web.launch:main"
 tradingagents-quick = "quick_analyze:main"
 
+[tool.setuptools]
+py-modules = ["quick_analyze"]
+
 [tool.setuptools.packages.find]
 include = ["tradingagents*", "cli*", "web*"]
 

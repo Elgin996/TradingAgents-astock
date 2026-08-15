@@ -1332,6 +1332,9 @@ def performance(
     if json_out:
         console.print_json(_json.dumps(summary, ensure_ascii=False))
         return
+    console.print(Markdown(format_report(summary)))
+
+
 @app.command()
 def quick(
     ticker: Optional[str] = typer.Argument(None, help="股票或 ETF 代码 (如 517520, 159242.etf, 600519)"),

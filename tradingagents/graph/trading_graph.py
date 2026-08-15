@@ -162,7 +162,9 @@ class TradingAgentsGraph:
         self.callbacks = callbacks or []
 
         _default_analysts = ["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"]
-        self._explicit_analysts = selected_analysts is not None and selected_analysts != _default_analysts
+        # Only ``None`` is implicit. Passing the full default list is still an
+        # explicit choice and must not be rewritten when the ticker is an ETF.
+        self._explicit_analysts = selected_analysts is not None
         if selected_analysts is None:
             if self.config.get("is_etf", False):
                 selected_analysts = ["market"]

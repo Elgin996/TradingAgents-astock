@@ -103,6 +103,21 @@ def test_deepseek_v4_family_still_matched_by_pattern():
 
 
 @pytest.mark.unit
+def test_qwen_37_flash_rejects_tool_choice():
+    for model in ("qwen3.7-flash", "qwen/qwen3.7-flash", "Qwen/Qwen3.7-Flash"):
+        assert get_capabilities(model).supports_tool_choice is False
+
+
+@pytest.mark.unit
+def test_other_qwen_families_keep_permissive_defaults():
+    """tool_choice=False 只在 3.7 上验证过，不能覆盖 qwen2.5 / qwen3 / qwen-plus。"""
+    for model in ("qwen2.5-72b", "qwen3", "qwen3.5-plus", "qwen-plus", "qwen/qwen-plus"):
+        capabilities = get_capabilities(model)
+        assert capabilities.supports_tool_choice is True
+        assert capabilities.preferred_structured_method == "function_calling"
+
+
+@pytest.mark.unit
 def test_explicit_tool_choice_is_dropped_for_unsupported_model():
     """能力表声明「不支持 tool_choice」就必须真正生效。
     原实现用 setdefault，调用方显式传入时会被保留，API 调用照样失败。"""

@@ -24,25 +24,44 @@ def test_etf_detection_and_normalization(symbol, expected_etf, expected_code):
     assert _normalize_ticker(symbol) == expected_code
 
 
-def test_etf_auto_defaults_to_market_analyst(monkeypatch):
-    """When analyzing an ETF without explicit analyst selection, default to ['market']."""
-    created = []
-
+def _patch_llm(monkeypatch):
     class FakeClient:
-        def __init__(self, **kw): pass
+        def __init__(self, **kw):
+            pass
+
         def get_llm(self):
             class FakeLLM:
-                def invoke(self, *a, **kw): return "OK"
-                def bind_tools(self, *a, **kw): return self
+                def invoke(self, *a, **kw):
+                    return "OK"
+
+                def bind_tools(self, *a, **kw):
+                    return self
+
             return FakeLLM()
 
     from tradingagents.graph import trading_graph as tg
+
     monkeypatch.setattr(tg, "create_llm_client", lambda *a, **kw: FakeClient())
+
+
+def test_etf_auto_defaults_to_market_analyst(monkeypatch):
+    """When analyzing an ETF without explicit analyst selection, default to ['market']."""
+    _patch_llm(monkeypatch)
 
     ta = TradingAgentsGraph(debug=False)
     # Default without ticker
     assert "fundamentals" in ta.selected_analysts
 
     # Prepare for ETF ticker: should auto-switch to market analyst only
-    state, args, step = ta.prepare_graph_run("517520.etf", "2026-08-14")
+    ta.prepare_graph_run("517520.etf", "2026-08-14")
     assert ta.selected_analysts == ["market"]
+
+
+def test_explicit_full_analyst_list_is_kept_for_etf(monkeypatch):
+    """Passing the default seven analysts is still an explicit choice."""
+    _patch_llm(monkeypatch)
+
+    full = ["market", "social", "news", "fundamentals", "policy", "hot_money", "lockup"]
+    ta = TradingAgentsGraph(selected_analysts=full, debug=False)
+    ta.prepare_graph_run("517520.etf", "2026-08-14")
+    assert ta.selected_analysts == full

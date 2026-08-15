@@ -40,6 +40,37 @@ def test_subcommands_are_still_registered():
     names = {c.name or c.callback.__name__ for c in app.registered_commands}
     assert "analyze" in names
     assert "performance" in names
+    assert "quick" in names
+
+
+def test_performance_prints_markdown_report(monkeypatch):
+    """非 --json 路径必须把 format_report 打出来，不能静默 return。"""
+    import tradingagents.agents.utils.memory as memory_mod
+
+    class _FakeLog:
+        def __init__(self, _config):
+            pass
+
+        def load_entries(self):
+            return []
+
+    monkeypatch.setattr(memory_mod, "TradingMemoryLog", _FakeLog)
+
+    result = CliRunner().invoke(app, ["performance"])
+
+    assert result.exit_code == 0
+    assert "暂无可统计的决策结果" in (result.output or "")
+
+
+def test_quick_analyze_is_declared_as_installable_module():
+    """console script ``tradingagents-quick`` 需要根模块被 setuptools 安装。"""
+    from pathlib import Path
+
+    text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(
+        encoding="utf-8"
+    )
+    assert 'tradingagents-quick = "quick_analyze:main"' in text
+    assert 'py-modules = ["quick_analyze"]' in text
 
 
 def test_callback_explains_why_it_exists():
